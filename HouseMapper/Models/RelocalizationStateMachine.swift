@@ -2,8 +2,8 @@ import Foundation
 
 struct RelocalizationStateMachine {
     static let timeout: TimeInterval = 45
-    static let mediumConfidenceFrameCount = 15
-    static let highConfidenceFrameCount = 60
+    static let mediumConfidenceDuration: TimeInterval = 0.5
+    static let highConfidenceDuration: TimeInterval = 2.0
 
     enum TrackingInput: Equatable {
         case normal
@@ -21,6 +21,7 @@ struct RelocalizationStateMachine {
         case trackingLimited
         case trackingUnavailable
         case timedOut
+        case invalidElapsedTime
 
         var statusMessage: String {
             switch self {
@@ -40,6 +41,8 @@ struct RelocalizationStateMachine {
                 return "Camera tracking is unavailable."
             case .timedOut:
                 return "ARKit could not match this view within 45 seconds. Move to a distinctive mapped area or retry."
+            case .invalidElapsedTime:
+                return "Relocalization timing became invalid. Retry the saved map."
             }
         }
     }
@@ -52,6 +55,7 @@ struct RelocalizationStateMachine {
     }
 
     private(set) var sustainedNormalFrameCount = 0
+    private(set) var sustainedNormalDuration: TimeInterval = 0
     private(set) var output = Output(
         phase: .relocalizing,
         confidence: .low,
@@ -60,20 +64,39 @@ struct RelocalizationStateMachine {
     )
 
     private var hasLocalized = false
-    private var hasTimedOut = false
+    private var hasTerminalFailure = false
+    private var normalTrackingStartedAt: TimeInterval?
+    private var lastElapsedTime: TimeInterval?
 
     mutating func update(
         tracking: TrackingInput,
         originIsPresent: Bool,
         elapsedTime: TimeInterval
     ) -> Output {
-        if hasTimedOut {
+        if hasTerminalFailure {
             return output
         }
 
-        if !hasLocalized, elapsedTime >= Self.timeout {
+        guard elapsedTime.isFinite,
+              elapsedTime >= 0,
+              lastElapsedTime.map({ elapsedTime >= $0 }) ?? true else {
+            resetNormalStreak()
+            hasTerminalFailure = true
+            output = Output(
+                phase: .failed,
+                confidence: .unavailable,
+                shouldPublishPose: false,
+                reason: .invalidElapsedTime
+            )
+            return output
+        }
+        lastElapsedTime = elapsedTime
+
+        let isValidMatch = tracking == .normal && originIsPresent
+        if !hasLocalized, !isValidMatch, elapsedTime >= Self.timeout {
             sustainedNormalFrameCount = 0
-            hasTimedOut = true
+            sustainedNormalDuration = 0
+            hasTerminalFailure = true
             output = Output(
                 phase: .failed,
                 confidence: .unavailable,
@@ -86,12 +109,19 @@ struct RelocalizationStateMachine {
         switch tracking {
         case .normal where originIsPresent:
             hasLocalized = true
+            if normalTrackingStartedAt == nil {
+                normalTrackingStartedAt = elapsedTime
+            }
             sustainedNormalFrameCount += 1
+            sustainedNormalDuration = max(
+                0,
+                elapsedTime - (normalTrackingStartedAt ?? elapsedTime)
+            )
 
             let confidence: ConfidenceBand
-            if sustainedNormalFrameCount >= Self.highConfidenceFrameCount {
+            if sustainedNormalDuration >= Self.highConfidenceDuration {
                 confidence = .high
-            } else if sustainedNormalFrameCount >= Self.mediumConfidenceFrameCount {
+            } else if sustainedNormalDuration >= Self.mediumConfidenceDuration {
                 confidence = .medium
             } else {
                 confidence = .low
@@ -101,13 +131,13 @@ struct RelocalizationStateMachine {
                 phase: .tracking,
                 confidence: confidence,
                 shouldPublishPose: true,
-                reason: sustainedNormalFrameCount < Self.mediumConfidenceFrameCount
+                reason: sustainedNormalDuration < Self.mediumConfidenceDuration
                     ? .confirmingStableTracking
                     : .localized
             )
 
         case .normal:
-            sustainedNormalFrameCount = 0
+            resetNormalStreak()
             output = Output(
                 phase: .relocalizing,
                 confidence: .low,
@@ -116,7 +146,7 @@ struct RelocalizationStateMachine {
             )
 
         case .limitedRelocalizing:
-            sustainedNormalFrameCount = 0
+            resetNormalStreak()
             output = Output(
                 phase: .relocalizing,
                 confidence: .low,
@@ -125,7 +155,7 @@ struct RelocalizationStateMachine {
             )
 
         case .limitedOther:
-            sustainedNormalFrameCount = 0
+            resetNormalStreak()
             output = Output(
                 phase: .limited,
                 confidence: .low,
@@ -134,7 +164,7 @@ struct RelocalizationStateMachine {
             )
 
         case .unavailable:
-            sustainedNormalFrameCount = 0
+            resetNormalStreak()
             output = Output(
                 phase: .limited,
                 confidence: .unavailable,
@@ -147,14 +177,21 @@ struct RelocalizationStateMachine {
     }
 
     mutating func reset() {
-        sustainedNormalFrameCount = 0
+        resetNormalStreak()
         hasLocalized = false
-        hasTimedOut = false
+        hasTerminalFailure = false
+        lastElapsedTime = nil
         output = Output(
             phase: .relocalizing,
             confidence: .low,
             shouldPublishPose: false,
             reason: .seekingMappedArea
         )
+    }
+
+    private mutating func resetNormalStreak() {
+        sustainedNormalFrameCount = 0
+        sustainedNormalDuration = 0
+        normalTrackingStartedAt = nil
     }
 }

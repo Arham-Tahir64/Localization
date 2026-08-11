@@ -35,11 +35,31 @@ final class ARSessionController: NSObject, ObservableObject {
     private var originAnchorSeen = false
     private var relocalizationMachine = RelocalizationStateMachine()
     private var frameCount = 0
-    private var relocalizationStart: Date?
+    private var relocalizationStartUptime: TimeInterval?
+    private var relocalizationTimeoutTask: Task<Void, Never>?
     private var lastDepthInspection = Date.distantPast
     private var lastTrailPosition: SIMD2<Float>?
+    private var lastPublishedPoseTimestamp: TimeInterval = -.infinity
+    private var lastDiagnosticPublicationTimestamp: TimeInterval = -.infinity
+    private var lastCoveragePublicationTimestamp: TimeInterval = -.infinity
     private var coverageGrid: Set<GridKey> = []
+    private var coverageRenderPoints: [SIMD2<Float>] = []
     private var loadedWorldMap: ARWorldMap?
+    private var lastMeshUpdateByAnchor: [UUID: TimeInterval] = [:]
+    private lazy var meshVisualizationMaterial: SCNMaterial = {
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.32)
+        material.isDoubleSided = true
+        return material
+    }()
+
+    private static let displayPoseInterval: TimeInterval = 1.0 / 15.0
+    private static let diagnosticPublicationInterval: TimeInterval = 0.25
+    private static let coveragePublicationInterval: TimeInterval = 0.5
+    private static let meshUpdateInterval: TimeInterval = 0.2
+    private static let timeoutFallbackGrace: TimeInterval = 0.25
+    private static let maximumOverviewPointCount = 1_000
 
     init(mode: ExperienceMode, mapLibrary: MapLibrary) {
         self.mode = mode
@@ -59,7 +79,7 @@ final class ARSessionController: NSObject, ObservableObject {
         view.session.delegateQueue = .main
         view.delegate = self
         view.automaticallyUpdatesLighting = true
-        view.antialiasingMode = .multisampling4X
+        view.antialiasingMode = .multisampling2X
         view.scene = SCNScene()
         view.debugOptions = [.showFeaturePoints, .showWorldOrigin]
         startIfNeeded()
@@ -100,7 +120,7 @@ final class ARSessionController: NSObject, ObservableObject {
                     self.loadedWorldMap = worldMap
                     self.mapPoints = Self.overviewPoints(
                         from: worldMap.rawFeaturePoints.points,
-                        maximumCount: 2_000
+                        maximumCount: Self.maximumOverviewPointCount
                     )
                     self.beginRelocalization(with: worldMap)
                 } catch {
@@ -119,6 +139,8 @@ final class ARSessionController: NSObject, ObservableObject {
 
     func stop() {
         hasStarted = false
+        relocalizationTimeoutTask?.cancel()
+        relocalizationTimeoutTask = nil
         sceneView?.session.pause()
     }
 
@@ -193,7 +215,8 @@ final class ARSessionController: NSObject, ObservableObject {
         pose = nil
         trail = []
         lastTrailPosition = nil
-        relocalizationStart = Date()
+        lastPublishedPoseTimestamp = -.infinity
+        relocalizationStartUptime = ProcessInfo.processInfo.systemUptime
         elapsedRelocalization = 0
         confidence = .low
         phase = .relocalizing
@@ -204,6 +227,21 @@ final class ARSessionController: NSObject, ObservableObject {
             configuration,
             options: [.resetTracking, .removeExistingAnchors]
         )
+
+        relocalizationTimeoutTask?.cancel()
+        relocalizationTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: UInt64(
+                        (RelocalizationStateMachine.timeout + Self.timeoutFallbackGrace)
+                            * 1_000_000_000
+                    )
+                )
+            } catch {
+                return
+            }
+            self?.applyRelocalizationTimeoutIfNeeded()
+        }
     }
 
     private func makeConfiguration(initialWorldMap: ARWorldMap?) -> ARWorldTrackingConfiguration {
@@ -259,12 +297,22 @@ final class ARSessionController: NSObject, ObservableObject {
     private func consume(frame: ARFrame) {
         frameCount += 1
         updateTrackingDescription(frame.camera.trackingState)
-        updateMappingStatus(frame.worldMappingStatus)
-        featurePointCount = frame.rawFeaturePoints?.points.count ?? 0
+        if frame.timestamp - lastDiagnosticPublicationTimestamp >= Self.diagnosticPublicationInterval {
+            lastDiagnosticPublicationTimestamp = frame.timestamp
+            updateMappingStatus(frame.worldMappingStatus)
+            let currentFeaturePointCount = frame.rawFeaturePoints?.points.count ?? 0
+            if featurePointCount != currentFeaturePointCount {
+                featurePointCount = currentFeaturePointCount
+            }
+        }
         inspectDepthIfNeeded(frame.sceneDepth ?? frame.smoothedSceneDepth)
 
-        if let start = relocalizationStart, phase != .tracking {
-            elapsedRelocalization = Date().timeIntervalSince(start)
+        var currentRelocalizationElapsed: TimeInterval = 0
+        if let start = relocalizationStartUptime {
+            currentRelocalizationElapsed = max(0, ProcessInfo.processInfo.systemUptime - start)
+            if Int(currentRelocalizationElapsed) != Int(elapsedRelocalization) {
+                elapsedRelocalization = currentRelocalizationElapsed
+            }
         }
 
         let cameraPose = CameraPose(
@@ -278,22 +326,24 @@ final class ARSessionController: NSObject, ObservableObject {
 
         switch mode {
         case .mapping:
-            pose = cameraPose
-            confidence = .unavailable
+            publishPoseIfNeeded(cameraPose)
+            if confidence != .unavailable { confidence = .unavailable }
             appendTrail(cameraPose.position)
             accumulateCoverage(from: frame)
 
         case .relocalization:
             updateRelocalizationState(
                 trackingState: frame.camera.trackingState,
-                cameraPose: cameraPose
+                cameraPose: cameraPose,
+                elapsedTime: currentRelocalizationElapsed
             )
         }
     }
 
     private func updateRelocalizationState(
         trackingState: ARCamera.TrackingState,
-        cameraPose: CameraPose
+        cameraPose: CameraPose,
+        elapsedTime: TimeInterval
     ) {
         let input: RelocalizationStateMachine.TrackingInput
         switch trackingState {
@@ -308,58 +358,94 @@ final class ARSessionController: NSObject, ObservableObject {
         let output = relocalizationMachine.update(
             tracking: input,
             originIsPresent: originAnchorSeen,
-            elapsedTime: elapsedRelocalization
+            elapsedTime: elapsedTime
         )
-        phase = output.phase
-        confidence = output.confidence
-        statusMessage = output.reason.statusMessage
+        applyRelocalizationOutput(output)
 
         if output.shouldPublishPose {
-            pose = cameraPose
+            publishPoseIfNeeded(cameraPose, force: pose == nil)
             appendTrail(cameraPose.position)
-        } else {
+        } else if pose != nil {
             pose = nil
         }
     }
 
-    private func updateTrackingDescription(_ state: ARCamera.TrackingState) {
-        switch state {
-        case .normal:
-            trackingDescription = "Normal"
-        case .notAvailable:
-            trackingDescription = "Not available"
-        case .limited(let reason):
-            switch reason {
-            case .initializing: trackingDescription = "Limited — initializing"
-            case .excessiveMotion: trackingDescription = "Limited — move slower"
-            case .insufficientFeatures: trackingDescription = "Limited — point at textured surfaces"
-            case .relocalizing: trackingDescription = "Limited — matching saved map"
-            @unknown default: trackingDescription = "Limited"
-            }
+    private func applyRelocalizationOutput(_ output: RelocalizationStateMachine.Output) {
+        if phase != output.phase { phase = output.phase }
+        if confidence != output.confidence { confidence = output.confidence }
+        let message = output.reason.statusMessage
+        if statusMessage != message { statusMessage = message }
+        if output.phase == .tracking {
+            relocalizationTimeoutTask?.cancel()
+            relocalizationTimeoutTask = nil
         }
     }
 
+    private func applyRelocalizationTimeoutIfNeeded() {
+        guard case .relocalization = mode, phase != .tracking else { return }
+        let output = relocalizationMachine.update(
+            tracking: .unavailable,
+            originIsPresent: originAnchorSeen,
+            elapsedTime: RelocalizationStateMachine.timeout + Self.timeoutFallbackGrace
+        )
+        applyRelocalizationOutput(output)
+        if !output.shouldPublishPose, pose != nil { pose = nil }
+    }
+
+    private func publishPoseIfNeeded(_ cameraPose: CameraPose, force: Bool = false) {
+        guard force || cameraPose.timestamp - lastPublishedPoseTimestamp >= Self.displayPoseInterval else {
+            return
+        }
+        lastPublishedPoseTimestamp = cameraPose.timestamp
+        pose = cameraPose
+    }
+
+    private func updateTrackingDescription(_ state: ARCamera.TrackingState) {
+        let description: String
+        switch state {
+        case .normal:
+            description = "Normal"
+        case .notAvailable:
+            description = "Not available"
+        case .limited(let reason):
+            switch reason {
+            case .initializing: description = "Limited — initializing"
+            case .excessiveMotion: description = "Limited — move slower"
+            case .insufficientFeatures: description = "Limited — point at textured surfaces"
+            case .relocalizing: description = "Limited — matching saved map"
+            @unknown default: description = "Limited"
+            }
+        }
+        if trackingDescription != description { trackingDescription = description }
+    }
+
     private func updateMappingStatus(_ status: ARFrame.WorldMappingStatus) {
+        let description: String
+        let progress: Double
         switch status {
         case .notAvailable:
-            mappingDescription = "Not available"
-            mappingProgress = 0
+            description = "Not available"
+            progress = 0
         case .limited:
-            mappingDescription = "Limited"
-            mappingProgress = 0.25
+            description = "Limited"
+            progress = 0.25
         case .extending:
-            mappingDescription = "Extending"
-            mappingProgress = 0.65
+            description = "Extending"
+            progress = 0.65
         case .mapped:
-            mappingDescription = "Mapped"
-            mappingProgress = 1
+            description = "Mapped"
+            progress = 1
         @unknown default:
-            mappingDescription = "Unknown"
-            mappingProgress = 0
+            description = "Unknown"
+            progress = 0
         }
+        if mappingDescription != description { mappingDescription = description }
+        if mappingProgress != progress { mappingProgress = progress }
 
         if case .mapping = mode {
-            canSave = (status == .extending || status == .mapped) && trackingDescription == "Normal"
+            let shouldAllowSave = (status == .extending || status == .mapped)
+                && trackingDescription == "Normal"
+            if canSave != shouldAllowSave { canSave = shouldAllowSave }
         }
     }
 
@@ -370,26 +456,35 @@ final class ARSessionController: NSObject, ObservableObject {
         }
         lastTrailPosition = point
         trail.append(point)
-        if trail.count > 1_000 {
-            trail.removeFirst(trail.count - 1_000)
+        if trail.count > 650 {
+            trail.removeFirst(50)
         }
     }
 
     private func accumulateCoverage(from frame: ARFrame) {
         guard frameCount.isMultiple(of: 8),
-              coverageGrid.count < 2_000,
+              coverageGrid.count < Self.maximumOverviewPointCount,
               let points = frame.rawFeaturePoints?.points else { return }
 
-        for point in points.stride(from: 0, by: max(1, points.count / 120)) {
+        var addedPoint = false
+        let step = max(1, points.count / 120)
+        for index in Swift.stride(from: 0, to: points.count, by: step) {
+            let point = points[index]
             let key = GridKey(
                 x: Int((point.x / 0.20).rounded()),
                 z: Int((point.z / 0.20).rounded())
             )
-            coverageGrid.insert(key)
-            if coverageGrid.count >= 2_000 { break }
+            if coverageGrid.insert(key).inserted {
+                coverageRenderPoints.append(SIMD2(Float(key.x) * 0.20, Float(key.z) * 0.20))
+                addedPoint = true
+            }
+            if coverageGrid.count >= Self.maximumOverviewPointCount { break }
         }
-        mapPoints = coverageGrid.map { key in
-            SIMD2(Float(key.x) * 0.20, Float(key.z) * 0.20)
+        if addedPoint,
+           frame.timestamp - lastCoveragePublicationTimestamp >= Self.coveragePublicationInterval
+            || coverageGrid.count >= Self.maximumOverviewPointCount {
+            lastCoveragePublicationTimestamp = frame.timestamp
+            mapPoints = coverageRenderPoints
         }
     }
 
@@ -428,7 +523,7 @@ final class ARSessionController: NSObject, ObservableObject {
                 }
             }
         }
-        depthDescription = detail
+        if depthDescription != detail { depthDescription = detail }
     }
 
     private static func overviewPoints(
@@ -439,9 +534,13 @@ final class ARSessionController: NSObject, ObservableObject {
             return points.map { SIMD2($0.x, $0.z) }
         }
         let strideSize = max(1, points.count / maximumCount)
-        return points.stride(from: 0, by: strideSize).prefix(maximumCount).map {
-            SIMD2($0.x, $0.z)
+        var result: [SIMD2<Float>] = []
+        result.reserveCapacity(maximumCount)
+        for index in Swift.stride(from: 0, to: points.count, by: strideSize) {
+            result.append(SIMD2(points[index].x, points[index].z))
+            if result.count == maximumCount { break }
         }
+        return result
     }
 }
 
@@ -490,6 +589,7 @@ extension ARSessionController: ARSCNViewDelegate {
         for anchor: ARAnchor
     ) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        lastMeshUpdateByAnchor[meshAnchor.identifier] = ProcessInfo.processInfo.systemUptime
         node.geometry = makeMeshGeometry(from: meshAnchor.geometry)
     }
 
@@ -499,7 +599,22 @@ extension ARSessionController: ARSCNViewDelegate {
         for anchor: ARAnchor
     ) {
         guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let lastUpdate = lastMeshUpdateByAnchor[meshAnchor.identifier],
+           now - lastUpdate < Self.meshUpdateInterval {
+            return
+        }
+        lastMeshUpdateByAnchor[meshAnchor.identifier] = now
         node.geometry = makeMeshGeometry(from: meshAnchor.geometry)
+    }
+
+    func renderer(
+        _ renderer: SCNSceneRenderer,
+        didRemove node: SCNNode,
+        for anchor: ARAnchor
+    ) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        lastMeshUpdateByAnchor.removeValue(forKey: meshAnchor.identifier)
     }
 
     private func makeMeshGeometry(from mesh: ARMeshGeometry) -> SCNGeometry {
@@ -526,11 +641,7 @@ extension ARSessionController: ARSCNViewDelegate {
             bytesPerIndex: mesh.faces.bytesPerIndex
         )
         let geometry = SCNGeometry(sources: [vertices, normals], elements: [faces])
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.32)
-        material.isDoubleSided = true
-        geometry.materials = [material]
+        geometry.materials = [meshVisualizationMaterial]
         return geometry
     }
 }
@@ -543,12 +654,5 @@ enum ARSessionControllerError: LocalizedError {
         case .worldMapUnavailable:
             return "ARKit did not produce a world map. Continue scanning and try again."
         }
-    }
-}
-
-private extension Array {
-    func stride(from start: Int, by step: Int) -> [Element] {
-        guard !isEmpty, start < count, step > 0 else { return [] }
-        return Swift.stride(from: start, to: count, by: step).map { self[$0] }
     }
 }

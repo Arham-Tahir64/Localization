@@ -12,6 +12,7 @@ final class MapLibrary: ObservableObject {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var sizeLoadingTask: Task<Void, Never>?
+    private var sizeLoadGeneration = UUID()
 
     init(
         fileManager: FileManager = .default,
@@ -47,11 +48,18 @@ final class MapLibrary: ObservableObject {
             )
             let directories = try fileManager.contentsOfDirectory(
                 at: mapsDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                 options: [.skipsHiddenFiles]
             )
 
             let discoveredMaps: [MapPackage] = directories.compactMap { directory -> MapPackage? in
+                guard let resourceValues = try? directory.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+                ),
+                resourceValues.isDirectory == true,
+                resourceValues.isSymbolicLink != true else {
+                    return nil
+                }
                 let metadataURL = directory.appendingPathComponent("metadata.json")
                 let worldMapURL = directory.appendingPathComponent("worldmap.arexperience")
                 guard fileManager.fileExists(atPath: metadataURL.path),
@@ -93,12 +101,12 @@ final class MapLibrary: ObservableObject {
                 isDirectory: true
             )
             let stagingDirectory = mapsDirectory.appendingPathComponent(
-                ".staging-\(metadata.id.uuidString)",
+                ".staging-\(metadata.id.uuidString)-\(UUID().uuidString)",
                 isDirectory: true
             )
 
-            if fileManager.fileExists(atPath: stagingDirectory.path) {
-                try fileManager.removeItem(at: stagingDirectory)
+            guard !fileManager.fileExists(atPath: finalDirectory.path) else {
+                throw MapLibraryError.packageAlreadyExists
             }
             try fileManager.createDirectory(
                 at: stagingDirectory,
@@ -125,9 +133,6 @@ final class MapLibrary: ObservableObject {
                     )
                 }
 
-                if fileManager.fileExists(atPath: finalDirectory.path) {
-                    try fileManager.removeItem(at: finalDirectory)
-                }
                 try fileManager.moveItem(at: stagingDirectory, to: finalDirectory)
                 return MapPackage(metadata: metadata, directoryURL: finalDirectory)
             } catch {
@@ -216,8 +221,11 @@ final class MapLibrary: ObservableObject {
     }
 
     func loadWorldMap(from package: MapPackage) async throws -> ARWorldMap {
+        let mapsDirectory = mapsDirectory
         try await Task.detached(priority: .userInitiated) {
-            let data = try Data(contentsOf: package.worldMapURL, options: [.mappedIfSafe])
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let worldMapURL = directory.appendingPathComponent("worldmap.arexperience")
+            let data = try Data(contentsOf: worldMapURL, options: [.mappedIfSafe])
             guard let map = try NSKeyedUnarchiver.unarchivedObject(
                 ofClass: ARWorldMap.self,
                 from: data
@@ -230,6 +238,8 @@ final class MapLibrary: ObservableObject {
 
     private func loadPackageSizes(for packages: [MapPackage]) {
         sizeLoadingTask?.cancel()
+        let generation = UUID()
+        sizeLoadGeneration = generation
         sizeLoadingTask = Task { [weak self] in
             let sizes = await Task.detached(priority: .utility) {
                 packages.reduce(into: [UUID: Int64]()) { result, package in
@@ -238,7 +248,9 @@ final class MapLibrary: ObservableObject {
                 }
             }.value
 
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled,
+                  let self,
+                  self.sizeLoadGeneration == generation else { return }
             maps = maps.map { package in
                 MapPackage(
                     metadata: package.metadata,
@@ -302,6 +314,7 @@ enum MapLibraryError: LocalizedError {
     case invalidPackageLocation
     case packageIdentifierMismatch
     case packageNotFound
+    case packageAlreadyExists
 
     var errorDescription: String? {
         switch self {
@@ -315,6 +328,8 @@ enum MapLibraryError: LocalizedError {
             return "The selected map does not match its package folder."
         case .packageNotFound:
             return "The selected map is no longer available."
+        case .packageAlreadyExists:
+            return "A map package with this identifier already exists."
         }
     }
 }

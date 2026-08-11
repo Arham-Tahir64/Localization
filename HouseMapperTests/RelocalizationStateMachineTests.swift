@@ -44,44 +44,39 @@ final class RelocalizationStateMachineTests: XCTestCase {
         XCTAssertEqual(machine.sustainedNormalFrameCount, 1)
     }
 
-    func testConfidenceChangesAtExactSustainedNormalThresholds() {
+    func testConfidenceChangesAtExactSustainedDurationThresholds() {
         var machine = RelocalizationStateMachine()
-        var output = machine.output
-
-        for frame in 1...14 {
-            output = machine.update(
-                tracking: .normal,
-                originIsPresent: true,
-                elapsedTime: TimeInterval(frame)
-            )
-        }
+        _ = machine.update(tracking: .normal, originIsPresent: true, elapsedTime: 1)
+        var output = machine.update(
+            tracking: .normal,
+            originIsPresent: true,
+            elapsedTime: 1.499
+        )
         XCTAssertEqual(output.confidence, .low)
         XCTAssertEqual(output.reason, .confirmingStableTracking)
 
         output = machine.update(
             tracking: .normal,
             originIsPresent: true,
-            elapsedTime: 15
+            elapsedTime: 1.5
         )
         XCTAssertEqual(output.confidence, .medium)
         XCTAssertEqual(output.reason, .localized)
 
-        for frame in 16...59 {
-            output = machine.update(
-                tracking: .normal,
-                originIsPresent: true,
-                elapsedTime: TimeInterval(frame)
-            )
-        }
+        output = machine.update(
+            tracking: .normal,
+            originIsPresent: true,
+            elapsedTime: 2.999
+        )
         XCTAssertEqual(output.confidence, .medium)
 
         output = machine.update(
             tracking: .normal,
             originIsPresent: true,
-            elapsedTime: 60
+            elapsedTime: 3
         )
         XCTAssertEqual(output.confidence, .high)
-        XCTAssertEqual(machine.sustainedNormalFrameCount, 60)
+        XCTAssertEqual(machine.sustainedNormalDuration, 2, accuracy: 0.000_001)
     }
 
     func testLimitedRelocalizingUsesRelocalizationPhaseAndSuppressesPose() {
@@ -134,11 +129,11 @@ final class RelocalizationStateMachineTests: XCTestCase {
 
     func testTrackingLossResetsConfidenceAndRecoveryStartsNewStreak() {
         var machine = RelocalizationStateMachine()
-        for frame in 1...20 {
+        for frame in 0...20 {
             _ = machine.update(
                 tracking: .normal,
                 originIsPresent: true,
-                elapsedTime: TimeInterval(frame)
+                elapsedTime: TimeInterval(frame) / 20
             )
         }
         XCTAssertEqual(machine.output.confidence, .medium)
@@ -146,12 +141,12 @@ final class RelocalizationStateMachineTests: XCTestCase {
         _ = machine.update(
             tracking: .limitedOther,
             originIsPresent: true,
-            elapsedTime: 21
+            elapsedTime: 1.1
         )
         let recovered = machine.update(
             tracking: .normal,
             originIsPresent: true,
-            elapsedTime: 22
+            elapsedTime: 1.2
         )
 
         XCTAssertEqual(machine.sustainedNormalFrameCount, 1)
@@ -182,7 +177,7 @@ final class RelocalizationStateMachineTests: XCTestCase {
         XCTAssertEqual(recovered.confidence, .low)
     }
 
-    func testTimeoutOccursAtFortyFiveSecondsWhenNeverLocalized() {
+    func testValidMatchWinsAtFortyFiveSecondDeadline() {
         var machine = RelocalizationStateMachine()
 
         let beforeDeadline = machine.update(
@@ -197,11 +192,43 @@ final class RelocalizationStateMachineTests: XCTestCase {
         )
 
         XCTAssertEqual(beforeDeadline.phase, .relocalizing)
-        XCTAssertEqual(atDeadline.phase, .failed)
-        XCTAssertEqual(atDeadline.confidence, .unavailable)
-        XCTAssertFalse(atDeadline.shouldPublishPose)
-        XCTAssertEqual(atDeadline.reason, .timedOut)
-        XCTAssertEqual(machine.sustainedNormalFrameCount, 0)
+        XCTAssertEqual(atDeadline.phase, .tracking)
+        XCTAssertTrue(atDeadline.shouldPublishPose)
+        XCTAssertEqual(atDeadline.confidence, .low)
+    }
+
+    func testInvalidElapsedTimeFailsClosed() {
+        for elapsed in [-1.0, .nan, .infinity] {
+            var machine = RelocalizationStateMachine()
+            let output = machine.update(
+                tracking: .limitedRelocalizing,
+                originIsPresent: false,
+                elapsedTime: elapsed
+            )
+            XCTAssertEqual(output.phase, .failed)
+            XCTAssertEqual(output.reason, .invalidElapsedTime)
+            XCTAssertFalse(output.shouldPublishPose)
+        }
+    }
+
+    func testDecreasingElapsedTimeFailsClosed() {
+        var machine = RelocalizationStateMachine()
+        _ = machine.update(
+            tracking: .limitedRelocalizing,
+            originIsPresent: false,
+            elapsedTime: 2
+        )
+
+        let output = machine.update(
+            tracking: .normal,
+            originIsPresent: true,
+            elapsedTime: 1
+        )
+
+        XCTAssertEqual(output.phase, .failed)
+        XCTAssertEqual(output.confidence, .unavailable)
+        XCTAssertEqual(output.reason, .invalidElapsedTime)
+        XCTAssertFalse(output.shouldPublishPose)
     }
 
     func testTimeoutFailureIsLatchedUntilReset() {

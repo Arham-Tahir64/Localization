@@ -11,6 +11,7 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - [ARKit and iPhone research](docs/01-arkit-research.md)
 - [Architecture, map format, coordinate frames, and algorithms](docs/02-architecture.md)
 - [Implementation and validation plan](docs/03-implementation-plan.md)
+- [Benchmark findings and optimization synthesis](docs/benchmarks/04-orchestrator-synthesis.md)
 
 ## Current proof-of-concept scope
 

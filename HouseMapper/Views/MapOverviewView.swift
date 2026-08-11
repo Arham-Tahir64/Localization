@@ -8,8 +8,26 @@ struct MapOverviewView: View {
     var body: some View {
         Canvas { context, size in
             let current = pose.map { SIMD2($0.position.x, $0.position.z) }
-            let allPoints = mapPoints + trail + (current.map { [$0] } ?? [])
-            guard !allPoints.isEmpty else {
+            let trailStep = max(1, trail.count / 300)
+            var minX = Float.infinity
+            var maxX = -Float.infinity
+            var minZ = Float.infinity
+            var maxZ = -Float.infinity
+
+            func include(_ point: SIMD2<Float>) {
+                minX = min(minX, point.x)
+                maxX = max(maxX, point.x)
+                minZ = min(minZ, point.y)
+                maxZ = max(maxZ, point.y)
+            }
+
+            mapPoints.forEach(include)
+            for index in Swift.stride(from: 0, to: trail.count, by: trailStep) {
+                include(trail[index])
+            }
+            if let current { include(current) }
+
+            guard minX.isFinite else {
                 context.draw(
                     Text("Map appears as you move")
                         .font(.caption)
@@ -19,12 +37,10 @@ struct MapOverviewView: View {
                 return
             }
 
-            let xValues = allPoints.map(\.x)
-            let zValues = allPoints.map(\.y)
-            let minX = (xValues.min() ?? -1) - 0.5
-            let maxX = (xValues.max() ?? 1) + 0.5
-            let minZ = (zValues.min() ?? -1) - 0.5
-            let maxZ = (zValues.max() ?? 1) + 0.5
+            minX -= 0.5
+            maxX += 0.5
+            minZ -= 0.5
+            maxZ += 0.5
             let spanX = max(maxX - minX, 1)
             let spanZ = max(maxZ - minZ, 1)
             let scale = min((size.width - 20) / CGFloat(spanX), (size.height - 20) / CGFloat(spanZ))
@@ -36,18 +52,21 @@ struct MapOverviewView: View {
                 )
             }
 
+            var mapPointPath = Path()
             for point in mapPoints {
                 let center = project(point)
                 let rect = CGRect(x: center.x - 1.2, y: center.y - 1.2, width: 2.4, height: 2.4)
-                context.fill(Path(ellipseIn: rect), with: .color(.cyan.opacity(0.45)))
+                mapPointPath.addEllipse(in: rect)
             }
+            context.fill(mapPointPath, with: .color(.cyan.opacity(0.45)))
 
             if trail.count > 1 {
                 var path = Path()
                 path.move(to: project(trail[0]))
-                for point in trail.dropFirst() {
-                    path.addLine(to: project(point))
+                for index in Swift.stride(from: trailStep, to: trail.count, by: trailStep) {
+                    path.addLine(to: project(trail[index]))
                 }
+                if let last = trail.last { path.addLine(to: project(last)) }
                 context.stroke(path, with: .color(.yellow), lineWidth: 2)
             }
 
