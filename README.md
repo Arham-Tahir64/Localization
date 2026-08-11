@@ -12,6 +12,7 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - [Architecture, map format, coordinate frames, and algorithms](docs/02-architecture.md)
 - [Implementation and validation plan](docs/03-implementation-plan.md)
 - [Benchmark findings and optimization synthesis](docs/benchmarks/04-orchestrator-synthesis.md)
+- [2026 localization research: on-device and server-assisted](docs/research/04-sota-localization-2026.md)
 
 ## Current proof-of-concept scope
 
