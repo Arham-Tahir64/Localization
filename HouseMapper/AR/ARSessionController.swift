@@ -483,7 +483,7 @@ extension ARSessionController: @preconcurrency ARSessionDelegate {
     }
 }
 
-extension ARSessionController: @preconcurrency ARSCNViewDelegate {
+extension ARSessionController: ARSCNViewDelegate {
     func renderer(
         _ renderer: SCNSceneRenderer,
         didAdd node: SCNNode,

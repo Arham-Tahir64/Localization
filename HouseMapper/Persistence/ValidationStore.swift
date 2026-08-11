@@ -3,7 +3,7 @@ import Foundation
 
 @MainActor
 final class ValidationStore: ObservableObject {
-    static let defaultMaximumRecordCount = 100
+    nonisolated static let defaultMaximumRecordCount = 100
 
     @Published private(set) var records: [ValidationRecord] = []
     @Published private(set) var lastError: String?

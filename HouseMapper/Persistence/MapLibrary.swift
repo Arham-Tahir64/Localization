@@ -51,7 +51,7 @@ final class MapLibrary: ObservableObject {
                 options: [.skipsHiddenFiles]
             )
 
-            let discoveredMaps = directories.compactMap { directory in
+            let discoveredMaps: [MapPackage] = directories.compactMap { directory -> MapPackage? in
                 let metadataURL = directory.appendingPathComponent("metadata.json")
                 let worldMapURL = directory.appendingPathComponent("worldmap.arexperience")
                 guard fileManager.fileExists(atPath: metadataURL.path),
