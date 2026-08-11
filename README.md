@@ -23,3 +23,12 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - Stable saved-map pose output after ARKit has relocalized
 
 The project requires a physical LiDAR-capable iPhone. ARKit world tracking, scene depth, and relocalization cannot be meaningfully validated in Simulator.
+
+## Build
+
+1. Open `HouseMapper.xcodeproj` in Xcode 16 or newer.
+2. Select the `HouseMapper` target and set your own development team and bundle identifier.
+3. Connect the iPhone 16 Pro, trust the development computer, and select it as the run destination.
+4. Build and run. Grant camera permission when prompted.
+
+The repository's `iOS build` workflow performs an unsigned Simulator compile to catch source/project errors. Physical-device testing remains mandatory for LiDAR, tracking, persistence quality, relocalization behavior, performance, and thermal measurements.
