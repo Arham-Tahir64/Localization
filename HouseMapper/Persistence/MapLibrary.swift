@@ -222,7 +222,7 @@ final class MapLibrary: ObservableObject {
 
     func loadWorldMap(from package: MapPackage) async throws -> ARWorldMap {
         let mapsDirectory = mapsDirectory
-        try await Task.detached(priority: .userInitiated) {
+        return try await Task.detached(priority: .userInitiated) {
             let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
             let worldMapURL = directory.appendingPathComponent("worldmap.arexperience")
             let data = try Data(contentsOf: worldMapURL, options: [.mappedIfSafe])
