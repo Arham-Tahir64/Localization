@@ -31,4 +31,4 @@ The project requires a physical LiDAR-capable iPhone. ARKit world tracking, scen
 3. Connect the iPhone 16 Pro, trust the development computer, and select it as the run destination.
 4. Build and run. Grant camera permission when prompted.
 
-The repository's `iOS build` workflow performs an unsigned Simulator compile to catch source/project errors. Physical-device testing remains mandatory for LiDAR, tracking, persistence quality, relocalization behavior, performance, and thermal measurements.
+The repository's `iOS build` workflow performs an unsigned Simulator compile and runs coordinate-frame unit tests. Physical-device testing remains mandatory for LiDAR, tracking, persistence quality, relocalization behavior, performance, and thermal measurements.

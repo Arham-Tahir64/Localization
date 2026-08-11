@@ -18,6 +18,9 @@
 		A00000000000000000000009 /* ExperienceScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000009 /* ExperienceScreen.swift */; };
 		A0000000000000000000000A /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000B /* ARKit.framework */; };
 		A0000000000000000000000B /* SceneKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000C /* SceneKit.framework */; };
+		A0000000000000000000000C /* CoordinateFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000E /* CoordinateFrames.swift */; };
+		A0000000000000000000000D /* CoordinateFramesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000F /* CoordinateFramesTests.swift */; };
+		A0000000000000000000000E /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,7 +37,21 @@
 		B0000000000000000000000B /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
 		B0000000000000000000000C /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
 		B0000000000000000000000D /* HouseMapper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HouseMapper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0000000000000000000000E /* CoordinateFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateFrames.swift; sourceTree = "<group>"; };
+		B0000000000000000000000F /* CoordinateFramesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateFramesTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000010 /* HouseMapperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HouseMapperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B00000000000000000000011 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		G00000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E00000000000000000000002 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E00000000000000000000001;
+			remoteInfo = HouseMapper;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		C00000000000000000000001 /* Frameworks */ = {
@@ -46,6 +63,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C00000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000000E /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -53,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				D00000000000000000000002 /* HouseMapper */,
+				D0000000000000000000000A /* HouseMapperTests */,
 				D00000000000000000000007 /* Frameworks */,
 				D00000000000000000000008 /* Products */,
 			);
@@ -84,6 +110,7 @@
 			children = (
 				B00000000000000000000002 /* MapMetadata.swift */,
 				B00000000000000000000003 /* PoseEstimate.swift */,
+				B0000000000000000000000E /* CoordinateFrames.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -109,6 +136,7 @@
 			children = (
 				B0000000000000000000000B /* ARKit.framework */,
 				B0000000000000000000000C /* SceneKit.framework */,
+				B00000000000000000000011 /* XCTest.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -117,6 +145,7 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000000D /* HouseMapper.app */,
+				B00000000000000000000010 /* HouseMapperTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -130,6 +159,14 @@
 				B00000000000000000000009 /* ExperienceScreen.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		D0000000000000000000000A /* HouseMapperTests */ = {
+			isa = PBXGroup;
+			children = (
+				B0000000000000000000000F /* CoordinateFramesTests.swift */,
+			);
+			path = HouseMapperTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -152,6 +189,24 @@
 			productReference = B0000000000000000000000D /* HouseMapper.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E00000000000000000000003 /* HouseMapperTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F00000000000000000000007 /* Build configuration list for PBXNativeTarget "HouseMapperTests" */;
+			buildPhases = (
+				C00000000000000000000004 /* Sources */,
+				C00000000000000000000005 /* Frameworks */,
+				C00000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				G00000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = HouseMapperTests;
+			productName = HouseMapperTests;
+			productReference = B00000000000000000000010 /* HouseMapperTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -164,6 +219,10 @@
 				TargetAttributes = {
 					E00000000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					E00000000000000000000003 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = E00000000000000000000001;
 					};
 				};
 			};
@@ -181,12 +240,20 @@
 			projectRoot = "";
 			targets = (
 				E00000000000000000000001 /* HouseMapper */,
+				E00000000000000000000003 /* HouseMapperTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C00000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -209,10 +276,27 @@
 				A00000000000000000000007 /* MapOverviewView.swift in Sources */,
 				A00000000000000000000008 /* HomeView.swift in Sources */,
 				A00000000000000000000009 /* ExperienceScreen.swift in Sources */,
+				A0000000000000000000000C /* CoordinateFrames.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000000D /* CoordinateFramesTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		G00000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E00000000000000000000001 /* HouseMapper */;
+			targetProxy = G00000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		F00000000000000000000003 /* Debug */ = {
@@ -366,6 +450,46 @@
 			};
 			name = Release;
 		};
+		F00000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.HouseMapperTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HouseMapper.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HouseMapper";
+			};
+			name = Debug;
+		};
+		F00000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.HouseMapperTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HouseMapper.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/HouseMapper";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -383,6 +507,15 @@
 			buildConfigurations = (
 				F00000000000000000000005 /* Debug */,
 				F00000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F00000000000000000000007 /* Build configuration list for PBXNativeTarget "HouseMapperTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F00000000000000000000008 /* Debug */,
+				F00000000000000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

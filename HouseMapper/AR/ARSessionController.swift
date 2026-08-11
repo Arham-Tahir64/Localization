@@ -274,7 +274,10 @@ final class ARSessionController: NSObject, ObservableObject {
         }
 
         let cameraPose = CameraPose(
-            mapFromCamera: frame.camera.transform,
+            mapFromCamera: CoordinateFrames.mapFromCamera(
+                mapFromWorld: matrix_identity_float4x4,
+                worldFromCamera: frame.camera.transform
+            ),
             eulerAngles: frame.camera.eulerAngles,
             timestamp: frame.timestamp
         )

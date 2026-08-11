@@ -27,3 +27,13 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           build
 
+      - name: Test coordinate transforms
+        run: >-
+          xcodebuild
+          -project HouseMapper.xcodeproj
+          -scheme HouseMapper
+          -configuration Debug
+          -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest'
+          -derivedDataPath DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          test
