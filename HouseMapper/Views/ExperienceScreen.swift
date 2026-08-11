@@ -3,10 +3,15 @@ import UIKit
 
 struct ExperienceScreen: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var validationStore: ValidationStore
     @StateObject private var controller: ARSessionController
     @State private var mapName = "My House"
     @State private var showingSaveDialog = false
     @State private var showingSavedAlert = false
+    @State private var validationStartedAt: Date?
+    @State private var validationStartTracking = "Waiting for camera"
+    @State private var validationStartConfidence = ConfidenceBand.unavailable.rawValue
+    @State private var validationAttemptRecorded = false
 
     private let mode: ExperienceMode
 
@@ -53,7 +58,25 @@ struct ExperienceScreen: View {
             .padding()
         }
         .preferredColorScheme(.dark)
-        .onDisappear { controller.stop() }
+        .onAppear { beginValidationAttemptIfNeeded() }
+        .onDisappear {
+            recordValidationIfNeeded(outcome: .cancelled, notes: "Relocalization view closed before completion.")
+            controller.stop()
+        }
+        .onChange(of: controller.phase) { _, phase in
+            guard case .relocalization = mode else { return }
+            switch phase {
+            case .tracking:
+                recordValidationIfNeeded(outcome: .success)
+            case .failed:
+                let outcome: ValidationOutcome = controller.elapsedRelocalization >= RelocalizationStateMachine.timeout
+                    ? .timeout
+                    : .sessionFailure
+                recordValidationIfNeeded(outcome: outcome, notes: controller.statusMessage)
+            default:
+                break
+            }
+        }
         .onChange(of: controller.savedPackage) { _, package in
             showingSavedAlert = package != nil
         }
@@ -172,6 +195,7 @@ struct ExperienceScreen: View {
         case .relocalization:
             if controller.phase == .failed || controller.phase == .limited {
                 Button {
+                    beginValidationAttemptIfNeeded(forceNewAttempt: true)
                     controller.retryRelocalization()
                 } label: {
                     Label("Retry Saved Map", systemImage: "arrow.clockwise")
@@ -203,6 +227,53 @@ struct ExperienceScreen: View {
         case .low: return .orange
         case .unavailable: return .secondary
         }
+    }
+
+    private func beginValidationAttemptIfNeeded(forceNewAttempt: Bool = false) {
+        guard case .relocalization = mode else { return }
+        if forceNewAttempt || validationStartedAt == nil {
+            validationStartedAt = Date()
+            validationStartTracking = controller.trackingDescription
+            validationStartConfidence = controller.confidence.rawValue
+            validationAttemptRecorded = false
+        }
+    }
+
+    private func recordValidationIfNeeded(
+        outcome: ValidationOutcome,
+        notes: String? = nil
+    ) {
+        guard !validationAttemptRecorded,
+              let startedAt = validationStartedAt,
+              case .relocalization(let package) = mode else { return }
+
+        let finalPosition = controller.pose.map {
+            ValidationPosition(x: $0.position.x, y: $0.position.y, z: $0.position.z)
+        }
+        let finalOrientation = controller.pose.map {
+            ValidationOrientation(
+                pitch: $0.eulerAngles.x,
+                yaw: $0.eulerAngles.y,
+                roll: $0.eulerAngles.z
+            )
+        }
+        validationStore.append(
+            ValidationRecord(
+                mapID: package.id,
+                mapName: package.metadata.name,
+                startedAt: startedAt,
+                completedAt: Date(),
+                outcome: outcome,
+                startTrackingLabel: validationStartTracking,
+                endTrackingLabel: controller.trackingDescription,
+                startConfidenceLabel: validationStartConfidence,
+                endConfidenceLabel: controller.confidence.rawValue,
+                finalPosition: finalPosition,
+                finalOrientation: finalOrientation,
+                notes: notes
+            )
+        )
+        validationAttemptRecorded = true
     }
 }
 

@@ -33,7 +33,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private var hasDepth = false
     private var hasSceneReconstruction = false
     private var originAnchorSeen = false
-    private var normalFrameCount = 0
+    private var relocalizationMachine = RelocalizationStateMachine()
     private var frameCount = 0
     private var relocalizationStart: Date?
     private var lastDepthInspection = Date.distantPast
@@ -189,7 +189,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private func beginRelocalization(with worldMap: ARWorldMap) {
         guard let sceneView else { return }
         originAnchorSeen = false
-        normalFrameCount = 0
+        relocalizationMachine.reset()
         pose = nil
         trail = []
         lastTrailPosition = nil
@@ -265,12 +265,6 @@ final class ARSessionController: NSObject, ObservableObject {
 
         if let start = relocalizationStart, phase != .tracking {
             elapsedRelocalization = Date().timeIntervalSince(start)
-            if elapsedRelocalization >= 45, phase == .relocalizing || phase == .loading {
-                phase = .failed
-                confidence = .unavailable
-                pose = nil
-                statusMessage = "ARKit could not match this view within 45 seconds. Move to a distinctive mapped area or retry."
-            }
         }
 
         let cameraPose = CameraPose(
@@ -301,39 +295,30 @@ final class ARSessionController: NSObject, ObservableObject {
         trackingState: ARCamera.TrackingState,
         cameraPose: CameraPose
     ) {
+        let input: RelocalizationStateMachine.TrackingInput
         switch trackingState {
-        case .normal where originAnchorSeen:
-            normalFrameCount += 1
-            phase = .tracking
-            confidence = normalFrameCount >= 60 ? .high : (normalFrameCount >= 15 ? .medium : .low)
+        case .normal:
+            input = .normal
+        case .limited(let reason):
+            input = reason == .relocalizing ? .limitedRelocalizing : .limitedOther
+        case .notAvailable:
+            input = .unavailable
+        }
+
+        let output = relocalizationMachine.update(
+            tracking: input,
+            originIsPresent: originAnchorSeen,
+            elapsedTime: elapsedRelocalization
+        )
+        phase = output.phase
+        confidence = output.confidence
+        statusMessage = output.reason.statusMessage
+
+        if output.shouldPublishPose {
             pose = cameraPose
             appendTrail(cameraPose.position)
-            statusMessage = normalFrameCount < 15
-                ? "Map matched. Confirming stable tracking…"
-                : "Pose is expressed in the saved map frame."
-
-        case .normal:
-            normalFrameCount = 0
-            confidence = .low
+        } else {
             pose = nil
-            if phase != .failed {
-                phase = .relocalizing
-                statusMessage = "Tracking is available, but the saved map origin has not been restored yet."
-            }
-
-        case .limited(let reason):
-            normalFrameCount = 0
-            confidence = .low
-            pose = nil
-            if phase != .failed {
-                phase = reason == .relocalizing ? .relocalizing : .limited
-            }
-
-        case .notAvailable:
-            normalFrameCount = 0
-            confidence = .unavailable
-            pose = nil
-            if phase != .failed { phase = .limited }
         }
     }
 

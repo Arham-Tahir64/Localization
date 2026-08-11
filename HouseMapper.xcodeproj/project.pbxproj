@@ -21,6 +21,13 @@
 		A0000000000000000000000C /* CoordinateFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000E /* CoordinateFrames.swift */; };
 		A0000000000000000000000D /* CoordinateFramesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000000F /* CoordinateFramesTests.swift */; };
 		A0000000000000000000000E /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* XCTest.framework */; };
+		A0000000000000000000000F /* RelocalizationStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* RelocalizationStateMachine.swift */; };
+		A00000000000000000000010 /* ValidationRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* ValidationRecord.swift */; };
+		A00000000000000000000011 /* ValidationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* ValidationStore.swift */; };
+		A00000000000000000000012 /* ValidationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000015 /* ValidationHistoryView.swift */; };
+		A00000000000000000000013 /* RelocalizationStateMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000016 /* RelocalizationStateMachineTests.swift */; };
+		A00000000000000000000014 /* ValidationRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000017 /* ValidationRecordTests.swift */; };
+		A00000000000000000000015 /* MapLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* MapLifecycleTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +48,13 @@
 		B0000000000000000000000F /* CoordinateFramesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateFramesTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000010 /* HouseMapperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HouseMapperTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000011 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
+		B00000000000000000000012 /* RelocalizationStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelocalizationStateMachine.swift; sourceTree = "<group>"; };
+		B00000000000000000000013 /* ValidationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValidationRecord.swift; sourceTree = "<group>"; };
+		B00000000000000000000014 /* ValidationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValidationStore.swift; sourceTree = "<group>"; };
+		B00000000000000000000015 /* ValidationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValidationHistoryView.swift; sourceTree = "<group>"; };
+		B00000000000000000000016 /* RelocalizationStateMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelocalizationStateMachineTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000017 /* ValidationRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ValidationRecordTests.swift; sourceTree = "<group>"; };
+		B00000000000000000000018 /* MapLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapLifecycleTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -111,6 +125,8 @@
 				B00000000000000000000002 /* MapMetadata.swift */,
 				B00000000000000000000003 /* PoseEstimate.swift */,
 				B0000000000000000000000E /* CoordinateFrames.swift */,
+				B00000000000000000000012 /* RelocalizationStateMachine.swift */,
+				B00000000000000000000013 /* ValidationRecord.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -119,6 +135,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000004 /* MapLibrary.swift */,
+				B00000000000000000000014 /* ValidationStore.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -157,6 +174,7 @@
 				B00000000000000000000007 /* MapOverviewView.swift */,
 				B00000000000000000000008 /* HomeView.swift */,
 				B00000000000000000000009 /* ExperienceScreen.swift */,
+				B00000000000000000000015 /* ValidationHistoryView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -165,6 +183,9 @@
 			isa = PBXGroup;
 			children = (
 				B0000000000000000000000F /* CoordinateFramesTests.swift */,
+				B00000000000000000000016 /* RelocalizationStateMachineTests.swift */,
+				B00000000000000000000017 /* ValidationRecordTests.swift */,
+				B00000000000000000000018 /* MapLifecycleTests.swift */,
 			);
 			path = HouseMapperTests;
 			sourceTree = "<group>";
@@ -277,6 +298,10 @@
 				A00000000000000000000008 /* HomeView.swift in Sources */,
 				A00000000000000000000009 /* ExperienceScreen.swift in Sources */,
 				A0000000000000000000000C /* CoordinateFrames.swift in Sources */,
+				A0000000000000000000000F /* RelocalizationStateMachine.swift in Sources */,
+				A00000000000000000000010 /* ValidationRecord.swift in Sources */,
+				A00000000000000000000011 /* ValidationStore.swift in Sources */,
+				A00000000000000000000012 /* ValidationHistoryView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -285,6 +310,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0000000000000000000000D /* CoordinateFramesTests.swift in Sources */,
+				A00000000000000000000013 /* RelocalizationStateMachineTests.swift in Sources */,
+				A00000000000000000000014 /* ValidationRecordTests.swift in Sources */,
+				A00000000000000000000015 /* MapLifecycleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

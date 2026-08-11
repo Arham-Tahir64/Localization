@@ -7,7 +7,7 @@ struct MapMetadata: Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     let createdAt: Date
-    let updatedAt: Date
+    var updatedAt: Date
     let appVersion: String
     let systemVersion: String
     let deviceModel: String
@@ -28,6 +28,17 @@ struct Vector3Record: Codable, Hashable, Sendable {
 struct MapPackage: Identifiable, Hashable, Sendable {
     let metadata: MapMetadata
     let directoryURL: URL
+    let sizeInBytes: Int64?
+
+    init(
+        metadata: MapMetadata,
+        directoryURL: URL,
+        sizeInBytes: Int64? = nil
+    ) {
+        self.metadata = metadata
+        self.directoryURL = directoryURL
+        self.sizeInBytes = sizeInBytes
+    }
 
     var id: UUID { metadata.id }
     var worldMapURL: URL { directoryURL.appendingPathComponent("worldmap.arexperience") }
