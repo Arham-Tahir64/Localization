@@ -217,12 +217,10 @@ final class ARSessionController: NSObject, ObservableObject {
             configuration.sceneReconstruction = .meshWithClassification
             hasSceneReconstruction = true
             meshDescription = "Classified LiDAR mesh"
-            sceneView?.debugOptions.insert(.showSceneUnderstanding)
         } else if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             configuration.sceneReconstruction = .mesh
             hasSceneReconstruction = true
             meshDescription = "LiDAR mesh"
-            sceneView?.debugOptions.insert(.showSceneUnderstanding)
         } else {
             hasSceneReconstruction = false
             meshDescription = "Scene mesh unavailable"
@@ -459,7 +457,7 @@ final class ARSessionController: NSObject, ObservableObject {
     }
 }
 
-extension ARSessionController: ARSessionDelegate {
+extension ARSessionController: @preconcurrency ARSessionDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         consume(frame: frame)
     }
@@ -497,7 +495,57 @@ extension ARSessionController: ARSessionDelegate {
     }
 }
 
-extension ARSessionController: ARSCNViewDelegate {}
+extension ARSessionController: @preconcurrency ARSCNViewDelegate {
+    func renderer(
+        _ renderer: SCNSceneRenderer,
+        didAdd node: SCNNode,
+        for anchor: ARAnchor
+    ) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        node.geometry = makeMeshGeometry(from: meshAnchor.geometry)
+    }
+
+    func renderer(
+        _ renderer: SCNSceneRenderer,
+        didUpdate node: SCNNode,
+        for anchor: ARAnchor
+    ) {
+        guard let meshAnchor = anchor as? ARMeshAnchor else { return }
+        node.geometry = makeMeshGeometry(from: meshAnchor.geometry)
+    }
+
+    private func makeMeshGeometry(from mesh: ARMeshGeometry) -> SCNGeometry {
+        let vertices = SCNGeometrySource(
+            buffer: mesh.vertices.buffer,
+            vertexFormat: mesh.vertices.format,
+            semantic: .vertex,
+            vertexCount: mesh.vertices.count,
+            dataOffset: mesh.vertices.offset,
+            dataStride: mesh.vertices.stride
+        )
+        let normals = SCNGeometrySource(
+            buffer: mesh.normals.buffer,
+            vertexFormat: mesh.normals.format,
+            semantic: .normal,
+            vertexCount: mesh.normals.count,
+            dataOffset: mesh.normals.offset,
+            dataStride: mesh.normals.stride
+        )
+        let faces = SCNGeometryElement(
+            buffer: mesh.faces.buffer,
+            primitiveType: .triangles,
+            primitiveCount: mesh.faces.count,
+            bytesPerIndex: mesh.faces.bytesPerIndex
+        )
+        let geometry = SCNGeometry(sources: [vertices, normals], elements: [faces])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.32)
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
+    }
+}
 
 enum ARSessionControllerError: LocalizedError {
     case worldMapUnavailable
