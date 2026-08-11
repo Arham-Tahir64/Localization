@@ -20,6 +20,7 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - iPhone-only operation after installation
 - LiDAR scene depth and scene reconstruction when supported
 - Live feature points, reconstructed geometry, mapping state, tracking state, pose, and top-down coverage view
+- Camera-first spatial HUD with projected ARKit features: cyan while mapping, muted while seeking, and green only for saved-ID overlap or a verified localized track
 - Local `ARWorldMap` packages with metadata and a visual relocalization guide
 - Reload through `initialWorldMap`, explicit relocalizing/tracking states, confidence bands, timeout, retry, and interruption recovery
 - Stable saved-map pose output after ARKit has relocalized

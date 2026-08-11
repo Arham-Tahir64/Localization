@@ -14,6 +14,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var mappingDescription = "Not available"
     @Published private(set) var mappingProgress: Double = 0
     @Published private(set) var featurePointCount = 0
+    @Published private(set) var featurePointSnapshot = FeaturePointSnapshot.empty
     @Published private(set) var depthDescription = "Waiting for LiDAR"
     @Published private(set) var meshDescription = "Checking support"
     @Published private(set) var pose: CameraPose?
@@ -41,25 +42,30 @@ final class ARSessionController: NSObject, ObservableObject {
     private var lastTrailPosition: SIMD2<Float>?
     private var lastPublishedPoseTimestamp: TimeInterval = -.infinity
     private var lastDiagnosticPublicationTimestamp: TimeInterval = -.infinity
+    private var lastFeatureOverlayTimestamp: TimeInterval = -.infinity
     private var lastCoveragePublicationTimestamp: TimeInterval = -.infinity
     private var coverageGrid: Set<GridKey> = []
     private var coverageRenderPoints: [SIMD2<Float>] = []
     private var loadedWorldMap: ARWorldMap?
+    private var savedFeatureIdentifiers: Set<UInt64> = []
     private var lastMeshUpdateByAnchor: [UUID: TimeInterval] = [:]
     private lazy var meshVisualizationMaterial: SCNMaterial = {
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.32)
+        material.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.18)
         material.isDoubleSided = true
         return material
     }()
 
     private static let displayPoseInterval: TimeInterval = 1.0 / 15.0
     private static let diagnosticPublicationInterval: TimeInterval = 0.25
+    private static let featureOverlayPublicationInterval: TimeInterval = 0.1
     private static let coveragePublicationInterval: TimeInterval = 0.5
     private static let meshUpdateInterval: TimeInterval = 0.2
     private static let timeoutFallbackGrace: TimeInterval = 0.25
     private static let maximumOverviewPointCount = 1_000
+    private static let maximumScreenFeaturePointCount = 240
+    private static let maximumPriorityFeaturePointCount = 120
 
     init(mode: ExperienceMode, mapLibrary: MapLibrary) {
         self.mode = mode
@@ -81,7 +87,7 @@ final class ARSessionController: NSObject, ObservableObject {
         view.automaticallyUpdatesLighting = true
         view.antialiasingMode = .multisampling2X
         view.scene = SCNScene()
-        view.debugOptions = [.showFeaturePoints, .showWorldOrigin]
+        view.debugOptions = []
         startIfNeeded()
     }
 
@@ -118,6 +124,7 @@ final class ARSessionController: NSObject, ObservableObject {
                     let worldMap = try await mapLibrary.loadWorldMap(from: package)
                     guard self.hasStarted else { return }
                     self.loadedWorldMap = worldMap
+                    self.savedFeatureIdentifiers = Set(worldMap.rawFeaturePoints.identifiers)
                     self.mapPoints = Self.overviewPoints(
                         from: worldMap.rawFeaturePoints.points,
                         maximumCount: Self.maximumOverviewPointCount
@@ -216,6 +223,8 @@ final class ARSessionController: NSObject, ObservableObject {
         trail = []
         lastTrailPosition = nil
         lastPublishedPoseTimestamp = -.infinity
+        lastFeatureOverlayTimestamp = -.infinity
+        featurePointSnapshot = .empty
         relocalizationStartUptime = ProcessInfo.processInfo.systemUptime
         elapsedRelocalization = 0
         confidence = .low
@@ -338,6 +347,8 @@ final class ARSessionController: NSObject, ObservableObject {
                 elapsedTime: currentRelocalizationElapsed
             )
         }
+
+        publishFeatureOverlay(from: frame)
     }
 
     private func updateRelocalizationState(
@@ -398,6 +409,105 @@ final class ARSessionController: NSObject, ObservableObject {
         }
         lastPublishedPoseTimestamp = cameraPose.timestamp
         pose = cameraPose
+    }
+
+    private func publishFeatureOverlay(from frame: ARFrame) {
+        guard frame.timestamp - lastFeatureOverlayTimestamp >= Self.featureOverlayPublicationInterval,
+              let sceneView,
+              sceneView.bounds.width > 0,
+              sceneView.bounds.height > 0 else {
+            return
+        }
+        lastFeatureOverlayTimestamp = frame.timestamp
+
+        guard let pointCloud = frame.rawFeaturePoints else {
+            if featurePointSnapshot != .empty { featurePointSnapshot = .empty }
+            return
+        }
+
+        let points = pointCloud.points
+        let identifiers = pointCloud.identifiers
+        let sourceCount = min(points.count, identifiers.count)
+        guard sourceCount > 0 else {
+            if featurePointSnapshot != .empty { featurePointSnapshot = .empty }
+            return
+        }
+
+        var priorityIndices: [Int] = []
+        priorityIndices.reserveCapacity(Self.maximumPriorityFeaturePointCount)
+        var identityMatchCount = 0
+        if !savedFeatureIdentifiers.isEmpty {
+            for index in 0..<sourceCount where savedFeatureIdentifiers.contains(identifiers[index]) {
+                identityMatchCount += 1
+                if priorityIndices.count < Self.maximumPriorityFeaturePointCount {
+                    priorityIndices.append(index)
+                }
+            }
+        }
+
+        let sampledIndices = FeaturePointPresentation.sampledIndices(
+            count: sourceCount,
+            maximumCount: Self.maximumScreenFeaturePointCount,
+            priorityIndices: priorityIndices
+        )
+        let viewportSize = sceneView.bounds.size
+        let orientation = sceneView.window?.windowScene?.interfaceOrientation ?? .portrait
+        let cameraFromWorld = simd_inverse(frame.camera.transform)
+        let overlayState: FeatureOverlayState
+        switch mode {
+        case .mapping:
+            overlayState = .scanning
+        case .relocalization:
+            overlayState = phase == .tracking ? .localized : .seekingMap
+        }
+
+        var projectedPoints: [ScreenFeaturePoint] = []
+        projectedPoints.reserveCapacity(sampledIndices.count)
+        for index in sampledIndices {
+            let worldPoint = points[index]
+            let cameraPoint = simd_mul(
+                cameraFromWorld,
+                SIMD4(worldPoint.x, worldPoint.y, worldPoint.z, 1)
+            )
+            guard cameraPoint.z < -0.05 else { continue }
+
+            let projected = frame.camera.projectPoint(
+                worldPoint,
+                orientation: orientation,
+                viewportSize: viewportSize
+            )
+            guard projected.x.isFinite,
+                  projected.y.isFinite,
+                  projected.x >= 0,
+                  projected.y >= 0,
+                  projected.x <= viewportSize.width,
+                  projected.y <= viewportSize.height else {
+                continue
+            }
+
+            let identifier = identifiers[index]
+            projectedPoints.append(
+                ScreenFeaturePoint(
+                    id: identifier,
+                    position: SIMD2(
+                        Float(projected.x / viewportSize.width),
+                        Float(projected.y / viewportSize.height)
+                    ),
+                    role: FeaturePointPresentation.role(
+                        for: identifier,
+                        savedIdentifiers: savedFeatureIdentifiers,
+                        state: overlayState
+                    )
+                )
+            )
+        }
+
+        featurePointSnapshot = FeaturePointSnapshot(
+            points: projectedPoints,
+            observedCount: sourceCount,
+            mapIdentityMatchCount: identityMatchCount,
+            timestamp: frame.timestamp
+        )
     }
 
     private func updateTrackingDescription(_ state: ARCamera.TrackingState) {
