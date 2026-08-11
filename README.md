@@ -23,6 +23,7 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - Local `ARWorldMap` packages with metadata and a visual relocalization guide
 - Reload through `initialWorldMap`, explicit relocalizing/tracking states, confidence bands, timeout, retry, and interruption recovery
 - Stable saved-map pose output after ARKit has relocalized
+- Versioned frame/result metadata contract for a future calibrated server localizer, including map/session/frame identity and optional depth geometry
 
 The project requires a physical LiDAR-capable iPhone. ARKit world tracking, scene depth, and relocalization cannot be meaningfully validated in Simulator.
 

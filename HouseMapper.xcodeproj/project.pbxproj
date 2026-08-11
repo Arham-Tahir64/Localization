@@ -30,6 +30,8 @@
 		A00000000000000000000015 /* MapLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* MapLifecycleTests.swift */; };
 		A00000000000000000000016 /* RelocalizationStressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000019 /* RelocalizationStressTests.swift */; };
 		A00000000000000000000017 /* PersistenceBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001A /* PersistenceBenchmarkTests.swift */; };
+		A00000000000000000000018 /* FrameObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001B /* FrameObservation.swift */; };
+		A00000000000000000000019 /* FrameObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001C /* FrameObservationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +61,8 @@
 		B00000000000000000000018 /* MapLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapLifecycleTests.swift; sourceTree = "<group>"; };
 		B00000000000000000000019 /* RelocalizationStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelocalizationStressTests.swift; sourceTree = "<group>"; };
 		B0000000000000000000001A /* PersistenceBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceBenchmarkTests.swift; sourceTree = "<group>"; };
+		B0000000000000000000001B /* FrameObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameObservation.swift; sourceTree = "<group>"; };
+		B0000000000000000000001C /* FrameObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameObservationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -131,6 +135,7 @@
 				B0000000000000000000000E /* CoordinateFrames.swift */,
 				B00000000000000000000012 /* RelocalizationStateMachine.swift */,
 				B00000000000000000000013 /* ValidationRecord.swift */,
+				B0000000000000000000001B /* FrameObservation.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -192,6 +197,7 @@
 				B00000000000000000000018 /* MapLifecycleTests.swift */,
 				B00000000000000000000019 /* RelocalizationStressTests.swift */,
 				B0000000000000000000001A /* PersistenceBenchmarkTests.swift */,
+				B0000000000000000000001C /* FrameObservationTests.swift */,
 			);
 			path = HouseMapperTests;
 			sourceTree = "<group>";
@@ -308,6 +314,7 @@
 				A00000000000000000000010 /* ValidationRecord.swift in Sources */,
 				A00000000000000000000011 /* ValidationStore.swift in Sources */,
 				A00000000000000000000012 /* ValidationHistoryView.swift in Sources */,
+				A00000000000000000000018 /* FrameObservation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,6 +328,7 @@
 				A00000000000000000000015 /* MapLifecycleTests.swift in Sources */,
 				A00000000000000000000016 /* RelocalizationStressTests.swift in Sources */,
 				A00000000000000000000017 /* PersistenceBenchmarkTests.swift in Sources */,
+				A00000000000000000000019 /* FrameObservationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
