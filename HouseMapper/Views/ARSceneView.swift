@@ -6,7 +6,10 @@ struct ARSceneView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView(frame: .zero)
-        controller.attach(to: view)
+        Task { @MainActor [weak controller, weak view] in
+            guard let controller, let view else { return }
+            controller.attach(to: view)
+        }
         return view
     }
 
