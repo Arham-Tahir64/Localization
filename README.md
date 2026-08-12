@@ -1,6 +1,7 @@
 # HouseMapper
 
-HouseMapper is a native, offline iOS proof of concept for this pipeline:
+HouseMapper is a native, offline-first iOS proof of concept with an optional
+computer-assisted accuracy path for this pipeline:
 
 > scan an indoor space → save a persistent map → terminate the app → reopen the map → relocalize → track a 6DoF camera pose in map coordinates
 
@@ -13,6 +14,8 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - [Implementation and validation plan](docs/03-implementation-plan.md)
 - [Benchmark findings and optimization synthesis](docs/benchmarks/04-orchestrator-synthesis.md)
 - [2026 localization research: on-device and server-assisted](docs/research/04-sota-localization-2026.md)
+- [Metric learned-feature server implementation](docs/13-server-localization-implementation.md)
+- [Connected server setup and operation](server/README.md)
 
 ## Current proof-of-concept scope
 
@@ -26,6 +29,8 @@ The first implementation deliberately uses ARKit's `ARWorldMap` as the localizat
 - Stable saved-map pose output after ARKit has relocalized
 - Opt-in connected relocalization client: calibrated JPEG queries, immutable server-map identity, strict PnP/inlier verification, temporal pose confirmation, and ARKit VIO handoff
 - Atomic `server-map.json` import per saved map; native `ARWorldMap` stays the offline-first path
+- Computer backend for calibrated package validation, metric ALIKED/LightGlue map
+  construction, map-specific retrieval, verified PnP, and real green 2D↔3D inliers
 
 The project requires a physical LiDAR-capable iPhone. ARKit world tracking, scene depth, and relocalization cannot be meaningfully validated in Simulator.
 

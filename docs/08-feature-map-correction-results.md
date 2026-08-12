@@ -90,7 +90,7 @@ iPhone 16 Pro frame-time, thermal, energy, or camera-performance results.
 - Add a checksummed/chunked map container and explicit document import/export.
 - Receive an actual external spatial artifact before implementing a format-specific
   importer; the supplied raster reference cannot recreate its source 3D map.
-- Implement the connected retrieval → local feature matching → PnP/RANSAC → depth
-  verification backend for reference-equivalent green 2D-to-3D correspondences and
-  arbitrary-start robustness. ARWorldMap remains the on-device backend/fallback.
+- The connected visual retrieval → learned local matching → PnP/RANSAC backend is
+  implemented in `server/`. Schema-v2 synchronized depth verification and held-out
+  arbitrary-start accuracy trials remain required.
 - Run repeated iPhone 16 Pro accuracy, latency, memory, energy, and thermal trials.

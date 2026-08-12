@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "housemapper-localization-server"
+version = "0.1.0"
+description = "Metric learned-feature map builder and localization service for HouseMapper"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "fastapi==0.141.1",
+    "numpy==2.5.2",
+    # LightGlue also declares opencv-python; use one compatible distribution
+    # rather than loading both GUI and headless OpenCV wheels into one process.
+    "opencv-python==5.0.0.93",
+    "torch==2.13.0",
+    "uvicorn[standard]==0.52.1",
+    "lightglue @ git+https://github.com/cvg/LightGlue.git@eb42fee2d71449efb0aa5c10549752b5d75384d8",
+]
+
+[project.optional-dependencies]
+test = ["httpx==0.28.1", "pytest==8.4.2", "psutil==7.2.2"]
+
+[project.scripts]
+housemapper-server = "housemapper_server.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["housemapper_server*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

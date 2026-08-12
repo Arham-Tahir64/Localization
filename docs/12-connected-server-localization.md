@@ -110,14 +110,14 @@ therefore remain attached to geometry instead of being stale network-frame dots.
 - **Weak/rejected result:** no new pose or green points.
 - **Timed out:** red after the shared 45-second attempt window.
 
-## What remains server-side
+## Server implementation
 
-The iPhone pipeline and contract are implemented. A compatible desktop service
-still needs to build the reconstruction and implement retrieval, local matching,
-PnP/RANSAC, optional geometric verification, and the response schema. Until a
-valid manifest is attached, behavior stays native and offline.
+The compatible desktop builder and `/localize` service are now implemented in
+`server/`: exact package validation, metric learned-feature triangulation,
+map-specific retrieval, ALIKED/LightGlue local matching, PnP/RANSAC/refinement,
+real inlier output, immutable checksummed maps, and bounded transport. See
+`docs/13-server-localization-implementation.md` and `server/README.md`.
 
-The next implementation slice is that reproducible server builder/service,
-followed by evaluation on held-out iPhone queries. Accuracy must be measured on
-physical checkpoints; no host benchmark in this repository claims centimetre
+Schema-v2 synchronized depth verification and held-out iPhone accuracy evaluation
+remain. No host synthetic benchmark in this repository claims centimetre physical
 pose accuracy.

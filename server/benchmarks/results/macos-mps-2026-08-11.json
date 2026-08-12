@@ -1,0 +1,80 @@
+{
+  "completeLearnedLocalization": {
+    "inliers": 611,
+    "queryKeypoints": 708,
+    "rawMatches": 6120,
+    "responseInliers": 611,
+    "retrievedKeyframes": 10,
+    "timing": {
+      "iterations": 5,
+      "maximumMilliseconds": 629.7740000300109,
+      "medianMilliseconds": 612.9322911147028,
+      "p95Milliseconds": 629.7740000300109
+    },
+    "uniqueCorrespondences": 612
+  },
+  "environment": {
+    "device": "mps",
+    "kind": "host-synthetic-performance-not-accuracy",
+    "note": "Synthetic timing and coordinate sanity only; not iPhone latency or physical localization accuracy.",
+    "numpy": "2.5.2",
+    "opencv": "5.0.0",
+    "platform": "macOS-26.3.1-arm64-arm-64bit",
+    "python": "3.12.13"
+  },
+  "learnedFeatures": {
+    "extraction": {
+      "iterations": 10,
+      "maximumMilliseconds": 99.88787514157593,
+      "medianMilliseconds": 98.81087497342378,
+      "p95Milliseconds": 99.88787514157593
+    },
+    "firstKeypoints": 678,
+    "image": {"height": 960, "width": 1280},
+    "matches": 535,
+    "matching": {
+      "iterations": 10,
+      "maximumMilliseconds": 37.845417158678174,
+      "medianMilliseconds": 37.49860404059291,
+      "p95Milliseconds": 37.845417158678174
+    },
+    "secondKeypoints": 606
+  },
+  "memory": {
+    "inferenceDeltaBytes": -54820864,
+    "modelDeltaBytes": 421527552,
+    "rssAfterInferenceBytes": 427524096,
+    "rssAfterModelBytes": 482344960,
+    "rssBeforeBytes": 60817408
+  },
+  "models": {
+    "features": "ALIKED-n16rot-4096-3aef27c5c85b",
+    "loadSeconds": 1.9454706672113389,
+    "matcher": "LightGlue-ALIKED-accuracy-b7a0d86ca6ae"
+  },
+  "pnp": {
+    "correspondences": 500,
+    "inliers": 400,
+    "medianResidualPixels": 0.45846453309059143,
+    "outliers": 100,
+    "rotationErrorDegrees": 0.005035079248208406,
+    "timing": {
+      "iterations": 100,
+      "maximumMilliseconds": 0.7757921703159809,
+      "medianMilliseconds": 0.5394790787249804,
+      "p95Milliseconds": 0.6732500623911619
+    },
+    "translationErrorMeters": 0.00035336060821568836
+  },
+  "retrieval": {
+    "databaseKeyframes": 12,
+    "descriptorSamplesPerKeyframe": 4096,
+    "timing": {
+      "iterations": 50,
+      "maximumMilliseconds": 4.501082934439182,
+      "medianMilliseconds": 3.888729028403759,
+      "p95Milliseconds": 4.254083149135113
+    },
+    "vladClusters": 32
+  }
+}
