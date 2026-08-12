@@ -214,15 +214,248 @@ final class FrameObservationTests: XCTestCase {
         }
     }
 
+    func testServerMapManifestRoundTripBindsMapVersionAndEndpoint() throws {
+        let manifest = makeServerManifest(endpoint: "https://mapper.example/localize")
+
+        let decoded = try ServerMapManifest.decode(
+            manifest.encodedJSON(),
+            expectedMapID: manifest.map.mapID
+        )
+
+        XCTAssertEqual(decoded, manifest)
+        XCTAssertThrowsError(
+            try ServerMapManifest.decode(manifest.encodedJSON(), expectedMapID: UUID())
+        ) { error in
+            XCTAssertEqual(error as? ServerMapManifestError, .mapIdentifierMismatch)
+        }
+    }
+
+    func testServerMapManifestAllowsTLSOrBonjourLocalHTTPOnly() throws {
+        XCTAssertNoThrow(
+            try makeServerManifest(endpoint: "https://mapper.example:8443/v1/localize")
+                .validate(expectedMapID: uuid(1))
+        )
+        XCTAssertNoThrow(
+            try makeServerManifest(endpoint: "http://mapping-mac.local:8080/localize")
+                .validate(expectedMapID: uuid(1))
+        )
+        for endpoint in [
+            "http://192.168.1.10:8080/localize",
+            "http://mapper.example/localize",
+            "https://user:secret@mapper.example/localize",
+            "https://mapper.example/localize?map=other",
+            "https://mapper.example/localize#fragment"
+        ] {
+            XCTAssertThrowsError(
+                try makeServerManifest(endpoint: endpoint).validate(expectedMapID: uuid(1)),
+                "Expected rejection for \(endpoint)"
+            )
+        }
+    }
+
+    func testServerResponseRequiresRealInBoundsInlierCoordinates() throws {
+        let observation = makeObservation()
+        let valid = makeResponse(for: observation, inlierCount: 48)
+        XCTAssertNoThrow(try valid.validate(for: observation))
+
+        let outside = ServerLocalizationResponse(
+            schemaVersion: 1,
+            result: valid.result,
+            inliers: [
+                ServerImagePoint(
+                    x: 1_920,
+                    y: 500,
+                    mapLandmarkID: 1,
+                    mapPosition: Vector3Record(x: 0, y: 0, z: 0)
+                )
+            ]
+        )
+        XCTAssertThrowsError(try outside.validate(for: observation)) { error in
+            XCTAssertEqual(error as? ServerLocalizationContractError, .invalidInlierPoint)
+        }
+
+        let overreported = ServerLocalizationResponse(
+            schemaVersion: 1,
+            result: valid.result,
+            inliers: makeInliers(count: valid.result.quality.inlierCount + 1)
+        )
+        XCTAssertThrowsError(try overreported.validate(for: observation)) { error in
+            XCTAssertEqual(error as? ServerLocalizationContractError, .inlierCountMismatch)
+        }
+    }
+
+    func testServerResponseRejects2D3DInlierThatDoesNotReproject() {
+        let observation = makeObservation()
+        let valid = makeResponse(for: observation, inlierCount: 48)
+        var corrupted = valid.inliers
+        let first = corrupted[0]
+        corrupted[0] = ServerImagePoint(
+            x: first.x + 100,
+            y: first.y,
+            mapLandmarkID: first.mapLandmarkID,
+            mapPosition: first.mapPosition
+        )
+        let response = ServerLocalizationResponse(
+            schemaVersion: 1,
+            result: valid.result,
+            inliers: corrupted
+        )
+
+        XCTAssertThrowsError(try response.validate(for: observation)) { error in
+            XCTAssertEqual(
+                error as? ServerLocalizationContractError,
+                .inlierGeometryMismatch
+            )
+        }
+    }
+
+    func testServerAcceptancePolicyRejectsWeakOrUnverifiedMatches() {
+        let observation = makeObservation()
+        let policy = ServerLocalizationAcceptancePolicy()
+
+        XCTAssertTrue(policy.accepts(makeResponse(for: observation, inlierCount: 48)))
+        XCTAssertFalse(policy.accepts(makeResponse(for: observation, inlierCount: 39)))
+
+        let weakQuality = LocalizationQualityRecord(
+            inlierCount: 80,
+            inlierRatio: 0.1,
+            medianReprojectionErrorPixels: 6,
+            depthOverlapRatio: 0.05,
+            depthRMSEMeters: 0.5
+        )
+        XCTAssertFalse(
+            policy.accepts(makeResponse(for: observation, inlierCount: 48, quality: weakQuality))
+        )
+    }
+
+    func testServerPoseConfirmationRequiresTwoConsistentMetricBridges() throws {
+        let expectedMapFromWorld = transform(translation: SIMD3(3, 0.2, -4), yaw: .pi / 5)
+        let first = makeObservation(frameID: 42, capturedAt: 100)
+        let secondWorldFromCamera = transform(translation: SIMD3(0.12, 0, -0.08), yaw: 0.03)
+        let second = makeObservation(
+            worldFromCamera: secondWorldFromCamera,
+            frameID: 43,
+            capturedAt: 101
+        )
+        var gate = ServerPoseConfirmationGate()
+
+        let firstBridge = try gate.consider(
+            response: makeResponse(
+                for: first,
+                mapFromCamera: simd_mul(expectedMapFromWorld, matrix_identity_float4x4)
+            ),
+            observation: first,
+            policy: ServerLocalizationAcceptancePolicy()
+        )
+        let confirmedBridge = try gate.consider(
+            response: makeResponse(
+                for: second,
+                mapFromCamera: simd_mul(expectedMapFromWorld, secondWorldFromCamera)
+            ),
+            observation: second,
+            policy: ServerLocalizationAcceptancePolicy()
+        )
+
+        XCTAssertNil(firstBridge)
+        XCTAssertEqual(gate.consistentResultCount, 2)
+        assertMatrix(try XCTUnwrap(confirmedBridge), equals: expectedMapFromWorld)
+    }
+
+    func testServerPoseConfirmationRejectsReorderedFrame() throws {
+        let first = makeObservation(frameID: 42, capturedAt: 100)
+        let stale = makeObservation(frameID: 41, capturedAt: 99)
+        var gate = ServerPoseConfirmationGate()
+        _ = try gate.consider(
+            response: makeResponse(for: first),
+            observation: first,
+            policy: ServerLocalizationAcceptancePolicy()
+        )
+
+        XCTAssertThrowsError(
+            try gate.consider(
+                response: makeResponse(for: stale),
+                observation: stale,
+                policy: ServerLocalizationAcceptancePolicy()
+            )
+        ) { error in
+            XCTAssertEqual(error as? ServerLocalizationContractError, .nonmonotonicFrame)
+        }
+    }
+
+    func testServerPoseConfirmationExpiresAcrossLongCaptureGap() throws {
+        let first = makeObservation(frameID: 42, capturedAt: 100)
+        let late = makeObservation(frameID: 43, capturedAt: 107)
+        var gate = ServerPoseConfirmationGate(maximumCaptureInterval: 6)
+        _ = try gate.consider(
+            response: makeResponse(for: first),
+            observation: first,
+            policy: ServerLocalizationAcceptancePolicy()
+        )
+
+        let result = try gate.consider(
+            response: makeResponse(for: late),
+            observation: late,
+            policy: ServerLocalizationAcceptancePolicy()
+        )
+
+        XCTAssertNil(result)
+        XCTAssertEqual(gate.consistentResultCount, 1)
+    }
+
+    func testServerRequestRejectsEmptyImageBytes() {
+        XCTAssertThrowsError(
+            try ServerLocalizationRequest(observation: makeObservation(), jpegImage: Data())
+        ) { error in
+            XCTAssertEqual(error as? ServerLocalizationContractError, .emptyImage)
+        }
+    }
+
+    func testServerRequestPreservesCalibratedEnvelopeAndJPEGExactly() throws {
+        let observation = makeObservation()
+        let jpeg = Data([0xFF, 0xD8, 0x01, 0x02, 0xFF, 0xD9])
+
+        let request = try ServerLocalizationRequest(
+            observation: observation,
+            jpegImage: jpeg
+        )
+        let decoded = try JSONDecoder().decode(
+            ServerLocalizationRequest.self,
+            from: request.encodedJSON()
+        )
+
+        XCTAssertEqual(decoded, request)
+        XCTAssertEqual(decoded.observation, observation)
+        XCTAssertEqual(decoded.jpegImage, jpeg)
+    }
+
+    func testJPEGOnlyRequestRejectsServerClaimOfDepthVerification() throws {
+        let observation = makeObservation()
+        let request = try ServerLocalizationRequest(
+            observation: observation,
+            jpegImage: Data([0xFF, 0xD8, 0x01, 0xFF, 0xD9])
+        )
+
+        XCTAssertThrowsError(
+            try request.validate(response: makeResponse(for: observation))
+        ) { error in
+            XCTAssertEqual(
+                error as? ServerLocalizationContractError,
+                .unexpectedDepthVerification
+            )
+        }
+    }
+
     private func makeObservation(
-        worldFromCamera: simd_float4x4 = matrix_identity_float4x4
+        worldFromCamera: simd_float4x4 = matrix_identity_float4x4,
+        frameID: UInt64 = 42,
+        capturedAt: TimeInterval = 123.5
     ) -> FrameObservationEnvelope {
         FrameObservationEnvelope(
             schemaVersion: 1,
             map: ServerMapReference(mapID: uuid(1), versionID: uuid(2)),
             sessionID: uuid(3),
-            frameID: 42,
-            capturedAt: 123.5,
+            frameID: frameID,
+            capturedAt: capturedAt,
             image: EncodedImageGeometry(
                 width: 1_920,
                 height: 1_080,
@@ -274,6 +507,89 @@ final class FrameObservationTests: XCTestCase {
             depthOverlapRatio: 0.64,
             depthRMSEMeters: 0.035
         )
+    }
+
+    private func makeServerManifest(endpoint: String) -> ServerMapManifest {
+        ServerMapManifest(
+            map: ServerMapReference(mapID: uuid(1), versionID: uuid(2)),
+            createdAt: Date(timeIntervalSince1970: 123),
+            queryEndpoint: endpoint,
+            models: ServerModelIdentity(
+                reconstruction: "COLMAP-3.13",
+                retrieval: "NetVLAD",
+                localFeatures: "SuperPoint",
+                matcher: "LightGlue"
+            ),
+            query: ServerQueryConfiguration(
+                maximumImageWidth: 1_280,
+                jpegQuality: 0.8,
+                minimumQueryInterval: 0.75,
+                requestTimeout: 8
+            )
+        )
+    }
+
+    private func makeResponse(
+        for observation: FrameObservationEnvelope,
+        inlierCount: Int = 48,
+        mapFromCamera: simd_float4x4 = matrix_identity_float4x4,
+        quality: LocalizationQualityRecord? = nil
+    ) -> ServerLocalizationResponse {
+        let result = ServerLocalizationResult(
+            schemaVersion: 1,
+            map: observation.map,
+            sessionID: observation.sessionID,
+            frameID: observation.frameID,
+            capturedAt: observation.capturedAt,
+            mapFromCamera: Matrix4x4Record(mapFromCamera),
+            verification: .visualAndDepth,
+            quality: quality ?? LocalizationQualityRecord(
+                inlierCount: inlierCount,
+                inlierRatio: 0.62,
+                medianReprojectionErrorPixels: 0,
+                depthOverlapRatio: 0.55,
+                depthRMSEMeters: 0.04
+            )
+        )
+        return ServerLocalizationResponse(
+            schemaVersion: 1,
+            result: result,
+            inliers: makeInliers(count: inlierCount, mapFromCamera: mapFromCamera)
+        )
+    }
+
+    private func makeInliers(
+        count: Int,
+        mapFromCamera: simd_float4x4 = matrix_identity_float4x4
+    ) -> [ServerImagePoint] {
+        var points: [ServerImagePoint] = []
+        points.reserveCapacity(count)
+        for index in 0..<count {
+            let column = index % 40
+            let row = index / 40
+            let x = Float(100 + column * 30)
+            let y = Float(100 + row * 30)
+            let cameraPoint = SIMD4(
+                (x - 960) * 2 / 1_100,
+                -(y - 540) * 2 / 1_100,
+                -2,
+                1
+            )
+            let mapPoint = simd_mul(mapFromCamera, cameraPoint)
+            points.append(
+                ServerImagePoint(
+                    x: x,
+                    y: y,
+                    mapLandmarkID: UInt64(index),
+                    mapPosition: Vector3Record(
+                        x: mapPoint.x,
+                        y: mapPoint.y,
+                        z: mapPoint.z
+                    )
+                )
+            )
+        }
+        return points
     }
 
     private func transform(

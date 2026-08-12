@@ -182,6 +182,26 @@ struct MapBenchmarkMetrics: Codable, Hashable, Sendable {
     }
 }
 
+enum ConnectedLocalizationQueryOutcome: String, Codable, Hashable, Sendable {
+    case transportFailure
+    case rejected
+    case acceptedPendingConfirmation
+    case confirmed
+}
+
+struct ConnectedLocalizationBenchmarkMetrics: Codable, Hashable, Sendable {
+    let queryCount: Int
+    let transportFailureCount: Int
+    let rejectedCount: Int
+    let acceptedCount: Int
+    let confirmedCount: Int
+    let meanRoundTripDuration: TimeInterval
+    let maximumRoundTripDuration: TimeInterval
+    let latestInlierCount: Int?
+    let latestInlierRatio: Float?
+    let latestMedianReprojectionErrorPixels: Float?
+}
+
 struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {
     static let currentSchemaVersion = 1
 
@@ -197,6 +217,7 @@ struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {
     let features: FeatureBenchmarkMetrics?
     let depth: DepthBenchmarkMetrics?
     let map: MapBenchmarkMetrics?
+    let connectedLocalization: ConnectedLocalizationBenchmarkMetrics?
 
     var id: UUID { sessionID }
 
@@ -212,7 +233,8 @@ struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {
         runtime: SessionRuntimeMetrics,
         features: FeatureBenchmarkMetrics?,
         depth: DepthBenchmarkMetrics?,
-        map: MapBenchmarkMetrics?
+        map: MapBenchmarkMetrics?,
+        connectedLocalization: ConnectedLocalizationBenchmarkMetrics? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.sessionID = sessionID
@@ -226,6 +248,7 @@ struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {
         self.features = features
         self.depth = depth
         self.map = map
+        self.connectedLocalization = connectedLocalization
     }
 
     var duration: TimeInterval {
@@ -266,6 +289,14 @@ struct SessionBenchmarkAccumulator: Sendable {
     private var maximumIdentityMatchCount = 0
     private var latestDepth: DepthBenchmarkMetrics?
     private var mapMetrics: MapBenchmarkMetrics?
+    private var connectedQueryCount = 0
+    private var connectedTransportFailureCount = 0
+    private var connectedRejectedCount = 0
+    private var connectedAcceptedCount = 0
+    private var connectedConfirmedCount = 0
+    private var connectedRoundTripDurationTotal: TimeInterval = 0
+    private var connectedMaximumRoundTripDuration: TimeInterval = 0
+    private var latestConnectedQuality: LocalizationQualityRecord?
 
     init(sessionID: UUID = UUID(), startedAt: Date) {
         self.sessionID = sessionID
@@ -315,6 +346,29 @@ struct SessionBenchmarkAccumulator: Sendable {
         mapMetrics = metrics
     }
 
+    mutating func recordConnectedLocalizationQuery(
+        duration: TimeInterval,
+        outcome: ConnectedLocalizationQueryOutcome,
+        quality: LocalizationQualityRecord?
+    ) {
+        guard duration.isFinite, duration >= 0 else { return }
+        connectedQueryCount += 1
+        connectedRoundTripDurationTotal += duration
+        connectedMaximumRoundTripDuration = max(connectedMaximumRoundTripDuration, duration)
+        switch outcome {
+        case .transportFailure:
+            connectedTransportFailureCount += 1
+        case .rejected:
+            connectedRejectedCount += 1
+        case .acceptedPendingConfirmation:
+            connectedAcceptedCount += 1
+        case .confirmed:
+            connectedAcceptedCount += 1
+            connectedConfirmedCount += 1
+        }
+        if let quality { latestConnectedQuality = quality }
+    }
+
     func makeReport(
         mode: BenchmarkSessionMode,
         completedAt: Date,
@@ -354,6 +408,23 @@ struct SessionBenchmarkAccumulator: Sendable {
         } else {
             features = nil
         }
+        let connectedLocalization: ConnectedLocalizationBenchmarkMetrics?
+        if connectedQueryCount > 0 {
+            connectedLocalization = ConnectedLocalizationBenchmarkMetrics(
+                queryCount: connectedQueryCount,
+                transportFailureCount: connectedTransportFailureCount,
+                rejectedCount: connectedRejectedCount,
+                acceptedCount: connectedAcceptedCount,
+                confirmedCount: connectedConfirmedCount,
+                meanRoundTripDuration: connectedRoundTripDurationTotal / Double(connectedQueryCount),
+                maximumRoundTripDuration: connectedMaximumRoundTripDuration,
+                latestInlierCount: latestConnectedQuality?.inlierCount,
+                latestInlierRatio: latestConnectedQuality?.inlierRatio,
+                latestMedianReprojectionErrorPixels: latestConnectedQuality?.medianReprojectionErrorPixels
+            )
+        } else {
+            connectedLocalization = nil
+        }
         return SessionBenchmarkReport(
             sessionID: sessionID,
             mode: mode,
@@ -365,7 +436,8 @@ struct SessionBenchmarkAccumulator: Sendable {
             runtime: runtime,
             features: features,
             depth: latestDepth,
-            map: mapMetrics
+            map: mapMetrics,
+            connectedLocalization: connectedLocalization
         )
     }
 }

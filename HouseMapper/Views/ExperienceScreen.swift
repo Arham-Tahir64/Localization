@@ -182,13 +182,23 @@ struct ExperienceScreen: View {
 
             SpatialStatusCapsule(
                 title: statusTitle,
-                detail: "\(controller.trackingDescription) • \(controller.captureDescription)",
+                detail: statusDetail,
                 featureCount: controller.featurePointSnapshot.displayedCount,
                 visibleFeatureCount: controller.featurePointSnapshot.visibleCount,
                 sourceFeatureCount: controller.featurePointSnapshot.observedCount,
                 matchCount: controller.featurePointSnapshot.mapIdentityMatchCount,
+                serverInlierCount: controller.featurePointSnapshot.serverVerifiedInlierCount,
                 color: experienceColor
             )
+        }
+    }
+
+    private var statusDetail: String {
+        switch mode {
+        case .mapping:
+            return "\(controller.trackingDescription) • \(controller.captureDescription)"
+        case .relocalization:
+            return "\(controller.trackingDescription) • \(controller.serverLocalizationDescription)"
         }
     }
 
@@ -282,9 +292,11 @@ struct ExperienceScreen: View {
                 : "Move slowly across corners, door frames, walls, and fixed objects."
         case .relocalization:
             if controller.phase == .tracking {
-                return "Green points are restored saved-map landmark IDs after pose lock."
+                return controller.featurePointSnapshot.serverVerifiedInlierCount > 0
+                    ? "Green points are verified server PnP inliers; pose is tracked in the saved map frame."
+                    : "Green points are restored saved-map landmark IDs after native ARKit pose lock."
             }
-            return "White points are live features; exact saved-ID overlaps turn green."
+            return "White points are live ARKit features; verified server PnP inliers turn green."
         }
     }
 

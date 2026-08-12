@@ -287,6 +287,50 @@ final class MapLifecycleTests: XCTestCase {
         )
     }
 
+    func testServerMapManifestImportsAtomicallyAndReloadsForExactMap() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try writePackage(inside: fixture.maps)
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+        let manifest = makeServerManifest(mapID: package.id)
+
+        let imported = try await library.importServerMapManifest(
+            manifest.encodedJSON(),
+            for: package
+        )
+        let loaded = try await library.loadServerMapManifest(for: package)
+
+        XCTAssertEqual(imported, manifest)
+        XCTAssertEqual(loaded, manifest)
+        let storedData = try Data(contentsOf: package.serverMapManifestURL)
+        let expectedData = try manifest.encodedJSON()
+        XCTAssertEqual(storedData, expectedData)
+    }
+
+    func testServerMapManifestRejectsAnotherMapWithoutReplacingExistingManifest() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try writePackage(inside: fixture.maps)
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+        let valid = makeServerManifest(mapID: package.id)
+        try await library.importServerMapManifest(valid.encodedJSON(), for: package)
+        let originalData = try Data(contentsOf: package.serverMapManifestURL)
+
+        do {
+            try await library.importServerMapManifest(
+                makeServerManifest(mapID: UUID()).encodedJSON(),
+                for: package
+            )
+            XCTFail("Expected a manifest for another map to be rejected")
+        } catch let error as ServerMapManifestError {
+            XCTAssertEqual(error, .mapIdentifierMismatch)
+        }
+
+        XCTAssertEqual(try Data(contentsOf: package.serverMapManifestURL), originalData)
+    }
+
     private func makeFixture() throws -> (root: URL, maps: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MapLifecycleTests-\(UUID().uuidString)", isDirectory: true)
@@ -350,6 +394,26 @@ final class MapLifecycleTests: XCTestCase {
             featurePointCount: featurePointCount,
             hasSceneDepth: true,
             hasSceneReconstruction: true
+        )
+    }
+
+    private func makeServerManifest(mapID: UUID) -> ServerMapManifest {
+        ServerMapManifest(
+            map: ServerMapReference(mapID: mapID, versionID: UUID()),
+            createdAt: Date(timeIntervalSince1970: 2_000),
+            queryEndpoint: "http://mapping-mac.local:8080/localize",
+            models: ServerModelIdentity(
+                reconstruction: "COLMAP-3.13",
+                retrieval: "NetVLAD",
+                localFeatures: "SuperPoint",
+                matcher: "LightGlue"
+            ),
+            query: ServerQueryConfiguration(
+                maximumImageWidth: 1_280,
+                jpegQuality: 0.8,
+                minimumQueryInterval: 0.75,
+                requestTimeout: 8
+            )
         )
     }
 

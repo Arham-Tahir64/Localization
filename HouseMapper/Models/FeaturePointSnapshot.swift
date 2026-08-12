@@ -69,6 +69,8 @@ enum FeaturePointRole: Equatable, Sendable {
     case seeking
     case mapIdentityMatch
     case localizedSupport
+    /// A 2D observation explicitly returned as an inlier by the server PnP solve.
+    case serverVerifiedInlier
 }
 
 struct ScreenFeaturePoint: Identifiable, Equatable, Sendable {
@@ -348,6 +350,7 @@ struct FeaturePointSnapshot: Equatable, Sendable {
         rejectedBehindCameraCount: 0,
         rejectedOutsideViewportCount: 0,
         mapIdentityMatchCount: 0,
+        serverVerifiedInlierCount: 0,
         timestamp: 0
     )
 
@@ -358,6 +361,7 @@ struct FeaturePointSnapshot: Equatable, Sendable {
     let rejectedInvalidProjectionCount: Int
     let rejectedOutsideViewportCount: Int
     let mapIdentityMatchCount: Int
+    let serverVerifiedInlierCount: Int
     let timestamp: TimeInterval
 
     var displayedCount: Int { points.count }
@@ -370,6 +374,7 @@ struct FeaturePointSnapshot: Equatable, Sendable {
         rejectedInvalidProjectionCount: Int = 0,
         rejectedOutsideViewportCount: Int,
         mapIdentityMatchCount: Int,
+        serverVerifiedInlierCount: Int = 0,
         timestamp: TimeInterval
     ) {
         self.points = points
@@ -379,6 +384,7 @@ struct FeaturePointSnapshot: Equatable, Sendable {
         self.rejectedInvalidProjectionCount = rejectedInvalidProjectionCount
         self.rejectedOutsideViewportCount = rejectedOutsideViewportCount
         self.mapIdentityMatchCount = mapIdentityMatchCount
+        self.serverVerifiedInlierCount = serverVerifiedInlierCount
         self.timestamp = timestamp
     }
 }

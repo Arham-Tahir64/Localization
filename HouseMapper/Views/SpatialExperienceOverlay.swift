@@ -26,6 +26,9 @@ struct SpatialFeatureOverlay: View {
                 case .mapIdentityMatch:
                     matchGlowPath.addEllipse(in: pointRect(center: center, diameter: 9))
                     matchCorePath.addEllipse(in: pointRect(center: center, diameter: 4.5))
+                case .serverVerifiedInlier:
+                    matchGlowPath.addEllipse(in: pointRect(center: center, diameter: 11))
+                    matchCorePath.addEllipse(in: pointRect(center: center, diameter: 5.5))
                 }
             }
 
@@ -130,6 +133,7 @@ struct SpatialStatusCapsule: View {
     let visibleFeatureCount: Int
     let sourceFeatureCount: Int
     let matchCount: Int
+    let serverInlierCount: Int
     let color: Color
 
     var body: some View {
@@ -155,12 +159,18 @@ struct SpatialStatusCapsule: View {
                 Text(featureCount.formatted())
                     .font(.caption.monospacedDigit().bold())
                 Text(
-                    matchCount > 0
+                    serverInlierCount > 0
+                        ? "\(serverInlierCount) PnP inliers"
+                        : matchCount > 0
                         ? "\(matchCount) restored IDs"
                         : "\(visibleFeatureCount)/\(sourceFeatureCount) visible"
                 )
                     .font(.caption2)
-                    .foregroundStyle(matchCount > 0 ? color : .white.opacity(0.52))
+                    .foregroundStyle(
+                        serverInlierCount > 0 || matchCount > 0
+                            ? color
+                            : .white.opacity(0.52)
+                    )
             }
         }
         .padding(.horizontal, 13)

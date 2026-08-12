@@ -24,6 +24,13 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>HouseMapper uses the camera and LiDAR Scanner to map and relocalize inside your home.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>HouseMapper can send calibrated camera frames to your selected local mapping computer for higher-accuracy relocalization.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

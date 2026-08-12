@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct HomeView: View {
     @EnvironmentObject private var mapLibrary: MapLibrary
@@ -8,6 +9,8 @@ struct HomeView: View {
     @State private var mapPendingRename: MapPackage?
     @State private var renameDraft = ""
     @State private var mapPendingDeletion: MapPackage?
+    @State private var mapPendingServerManifest: MapPackage?
+    @State private var isImportingServerManifest = false
     @State private var operationError: MapOperationError?
     @State private var mapsBeingUpdated: Set<UUID> = []
 
@@ -48,6 +51,10 @@ struct HomeView: View {
                                     package: package,
                                     isBeingUpdated: mapsBeingUpdated.contains(package.id),
                                     onOpen: { open(package) },
+                                    onAttachServerMap: {
+                                        mapPendingServerManifest = package
+                                        isImportingServerManifest = true
+                                    },
                                     onRename: { beginRenaming(package) },
                                     onDelete: { mapPendingDeletion = package }
                                 )
@@ -80,6 +87,15 @@ struct HomeView: View {
             .onAppear { mapLibrary.refresh() }
             .fullScreenCover(item: $activeExperience) { experience in
                 ExperienceScreen(mode: experience.mode, mapLibrary: mapLibrary)
+            }
+            .fileImporter(
+                isPresented: $isImportingServerManifest,
+                allowedContentTypes: [.json],
+                allowsMultipleSelection: false
+            ) { result in
+                guard let package = mapPendingServerManifest else { return }
+                mapPendingServerManifest = nil
+                importServerManifest(result, for: package)
             }
             .alert("Rename Map", isPresented: isRenamePresented) {
                 TextField("Map name", text: $renameDraft)
@@ -170,6 +186,42 @@ struct HomeView: View {
             }
         }
     }
+
+    private func importServerManifest(
+        _ result: Result<[URL], Error>,
+        for package: MapPackage
+    ) {
+        do {
+            let url = try firstSelectedURL(in: result.get())
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess { url.stopAccessingSecurityScopedResource() }
+            }
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            mapsBeingUpdated.insert(package.id)
+            Task {
+                defer { mapsBeingUpdated.remove(package.id) }
+                do {
+                    try await mapLibrary.importServerMapManifest(data, for: package)
+                } catch {
+                    operationError = MapOperationError(message: error.localizedDescription)
+                }
+            }
+        } catch {
+            operationError = MapOperationError(message: error.localizedDescription)
+        }
+    }
+}
+
+private func firstSelectedURL<T>(in values: [T]) throws -> T {
+    guard let first = values.first else { throw MapImportError.noFileSelected }
+    return first
+}
+
+private enum MapImportError: LocalizedError {
+    case noFileSelected
+
+    var errorDescription: String? { "No server map manifest was selected." }
 }
 
 private struct ActiveExperience: Identifiable {
@@ -186,6 +238,7 @@ private struct MapRow: View {
     let package: MapPackage
     let isBeingUpdated: Bool
     let onOpen: () -> Void
+    let onAttachServerMap: () -> Void
     let onRename: () -> Void
     let onDelete: () -> Void
 
@@ -215,6 +268,12 @@ private struct MapRow: View {
                         ShareLink(item: package.benchmarkURL) {
                             Label("Share Device Benchmark", systemImage: "square.and.arrow.up")
                         }
+                    }
+                    Button(action: onAttachServerMap) {
+                        Label(
+                            hasServerMap ? "Replace Server Localization Map" : "Attach Server Localization Map",
+                            systemImage: "network"
+                        )
                     }
                     Button(action: onRename) {
                         Label("Rename", systemImage: "pencil")
@@ -266,6 +325,11 @@ private struct MapRow: View {
             Text(packageSizeText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if hasServerMap {
+                Label("Connected localization ready", systemImage: "checkmark.seal.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
         }
     }
 
@@ -279,5 +343,9 @@ private struct MapRow: View {
             return "Calculating package size…"
         }
         return "\(ByteCountFormatter.string(fromByteCount: sizeInBytes, countStyle: .file)) on device"
+    }
+
+    private var hasServerMap: Bool {
+        FileManager.default.fileExists(atPath: package.serverMapManifestURL.path)
     }
 }

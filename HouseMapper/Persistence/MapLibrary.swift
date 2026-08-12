@@ -375,6 +375,53 @@ final class MapLibrary: ObservableObject {
         }.value
     }
 
+    @discardableResult
+    func importServerMapManifest(
+        _ data: Data,
+        for package: MapPackage
+    ) async throws -> ServerMapManifest {
+        guard data.count <= 1_048_576 else {
+            throw MapLibraryError.invalidServerMapManifest
+        }
+        let manifest: ServerMapManifest
+        do {
+            manifest = try ServerMapManifest.decode(data, expectedMapID: package.id)
+        } catch {
+            lastError = error.localizedDescription
+            throw error
+        }
+        let encoded = try manifest.encodedJSON()
+        let mapsDirectory = mapsDirectory
+        do {
+            try await Task.detached(priority: .utility) {
+                let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+                try encoded.write(
+                    to: directory.appendingPathComponent("server-map.json"),
+                    options: .atomic
+                )
+            }.value
+            refresh()
+            return manifest
+        } catch {
+            lastError = error.localizedDescription
+            throw error
+        }
+    }
+
+    func loadServerMapManifest(for package: MapPackage) async throws -> ServerMapManifest? {
+        let mapsDirectory = mapsDirectory
+        return try await Task.detached(priority: .utility) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let manifestURL = directory.appendingPathComponent("server-map.json")
+            guard FileManager.default.fileExists(atPath: manifestURL.path) else { return nil }
+            let data = try Data(contentsOf: manifestURL, options: [.mappedIfSafe])
+            guard data.count <= 1_048_576 else {
+                throw MapLibraryError.invalidServerMapManifest
+            }
+            return try ServerMapManifest.decode(data, expectedMapID: package.id)
+        }.value
+    }
+
     func benchmarkStorageMetrics(for package: MapPackage) async throws -> (
         spatialMapByteCount: Int?,
         packageByteCount: Int64
@@ -469,6 +516,7 @@ enum MapLibraryError: LocalizedError {
     case packageAlreadyExists
     case invalidBenchmark
     case invalidKeyframePackage
+    case invalidServerMapManifest
     case spatialMapFeatureCountMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
@@ -489,6 +537,8 @@ enum MapLibraryError: LocalizedError {
             return "The saved device benchmark does not match this map package."
         case .invalidKeyframePackage:
             return "The saved calibrated keyframe package is incomplete or invalid."
+        case .invalidServerMapManifest:
+            return "The server map manifest is too large or invalid."
         case .spatialMapFeatureCountMismatch(let expected, let actual):
             return "The saved map metadata reports \(expected) landmarks, but its spatial payload contains \(actual)."
         }

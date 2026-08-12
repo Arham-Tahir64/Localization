@@ -35,6 +35,7 @@
 		A0000000000000000000001A /* FeaturePointSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001D /* FeaturePointSnapshot.swift */; };
 		A0000000000000000000001B /* FeaturePointSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001E /* FeaturePointSnapshotTests.swift */; };
 		A0000000000000000000001C /* SpatialExperienceOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0000000000000000000001F /* SpatialExperienceOverlay.swift */; };
+		A0000000000000000000001D /* ServerLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* ServerLocalization.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -69,6 +70,7 @@
 		B0000000000000000000001D /* FeaturePointSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeaturePointSnapshot.swift; sourceTree = "<group>"; };
 		B0000000000000000000001E /* FeaturePointSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeaturePointSnapshotTests.swift; sourceTree = "<group>"; };
 		B0000000000000000000001F /* SpatialExperienceOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialExperienceOverlay.swift; sourceTree = "<group>"; };
+		B00000000000000000000020 /* ServerLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerLocalization.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -143,6 +145,7 @@
 				B00000000000000000000013 /* ValidationRecord.swift */,
 				B0000000000000000000001B /* FrameObservation.swift */,
 				B0000000000000000000001D /* FeaturePointSnapshot.swift */,
+				B00000000000000000000020 /* ServerLocalization.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -326,6 +329,7 @@
 				A0000000000000000000001C /* SpatialExperienceOverlay.swift in Sources */,
 				A00000000000000000000018 /* FrameObservation.swift in Sources */,
 				A0000000000000000000001A /* FeaturePointSnapshot.swift in Sources */,
+				A0000000000000000000001D /* ServerLocalization.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

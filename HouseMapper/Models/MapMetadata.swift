@@ -377,4 +377,5 @@ struct MapPackage: Identifiable, Hashable, Sendable {
     var benchmarkURL: URL { directoryURL.appendingPathComponent("benchmark.json") }
     var keyframesURL: URL { directoryURL.appendingPathComponent("keyframes", isDirectory: true) }
     var keyframeManifestURL: URL { keyframesURL.appendingPathComponent("manifest.json") }
+    var serverMapManifestURL: URL { directoryURL.appendingPathComponent("server-map.json") }
 }

@@ -30,6 +30,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var canSave = false
     @Published private(set) var benchmarkReport: SessionBenchmarkReport?
     @Published private(set) var mappingKeyframeCount = 0
+    @Published private(set) var serverLocalizationDescription = "Native map only"
 
     let mode: ExperienceMode
 
@@ -50,6 +51,17 @@ final class ARSessionController: NSObject, ObservableObject {
     private var lastCoveragePublicationTimestamp: TimeInterval = -.infinity
     private var loadedWorldMap: ARWorldMap?
     private var loadedSpatialMap: SpatialMapSnapshot?
+    private var serverMapManifest: ServerMapManifest?
+    private let serverLocalizationClient = ServerLocalizationHTTPClient()
+    private var serverPoseGate = ServerPoseConfirmationGate()
+    private var serverSessionID = UUID()
+    private var serverMapFromWorld: simd_float4x4?
+    private var serverVerifiedLandmarks: [ServerImagePoint] = []
+    private var serverFallbackTask: Task<Void, Never>?
+    private var serverQueryInFlight = false
+    private var serverRelocalizationActive = false
+    private var nextServerFrameID: UInt64 = 0
+    private var lastServerQueryTimestamp: TimeInterval = -.infinity
     private var mappingLandmarks = MappingLandmarkAccumulator(
         maximumRetainedLandmarks: 50_000
     )
@@ -82,6 +94,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static let maximumScreenFeaturePointCount = 240
     private static let maximumPriorityFeaturePointCount = 120
     private static let keyframeWidth = 1_280
+    private static let nativeRelocalizationAttemptDuration: TimeInterval = 10
 
     init(mode: ExperienceMode, mapLibrary: MapLibrary) {
         self.mode = mode
@@ -141,10 +154,15 @@ final class ARSessionController: NSObject, ObservableObject {
                     let worldMap = try await mapLibrary.loadWorldMap(from: package)
                     let spatialMap = try await mapLibrary.loadSpatialMap(from: package)
                     let keyframeManifest = try await mapLibrary.loadKeyframeManifest(for: package)
+                    let serverManifest = try await mapLibrary.loadServerMapManifest(for: package)
                     let storage = try await mapLibrary.benchmarkStorageMetrics(for: package)
                     guard self.hasStarted else { return }
                     self.loadedWorldMap = worldMap
                     self.loadedSpatialMap = spatialMap
+                    self.serverMapManifest = serverManifest
+                    self.serverLocalizationDescription = serverManifest == nil
+                        ? "Native ARWorldMap"
+                        : "Native map first • server fallback ready"
                     self.mappingKeyframeCount = keyframeManifest?.keyframes.count ?? 0
                     self.savedFeatureIdentifiers = Set(spatialMap.landmarks.map(\.id))
                     self.mapRenderSnapshot = SpatialMapRenderSnapshot.make(
@@ -182,6 +200,8 @@ final class ARSessionController: NSObject, ObservableObject {
         hasStarted = false
         relocalizationTimeoutTask?.cancel()
         relocalizationTimeoutTask = nil
+        serverFallbackTask?.cancel()
+        serverFallbackTask = nil
         sceneView?.session.pause()
     }
 
@@ -303,6 +323,14 @@ final class ARSessionController: NSObject, ObservableObject {
         benchmarkReport = nil
         originAnchorSeen = false
         relocalizationMachine.reset()
+        serverPoseGate.reset()
+        serverSessionID = UUID()
+        serverMapFromWorld = nil
+        serverVerifiedLandmarks = []
+        serverQueryInFlight = false
+        serverRelocalizationActive = false
+        nextServerFrameID = 0
+        lastServerQueryTimestamp = -.infinity
         pose = nil
         trail = []
         lastTrailPosition = nil
@@ -314,6 +342,9 @@ final class ARSessionController: NSObject, ObservableObject {
         confidence = .low
         phase = .relocalizing
         statusMessage = "Move slowly and look at textured areas you scanned before."
+        serverLocalizationDescription = serverMapManifest == nil
+            ? "Native ARWorldMap"
+            : "Trying native map for 10 seconds"
 
         let configuration = makeConfiguration(initialWorldMap: worldMap)
         sceneView.session.run(
@@ -335,6 +366,46 @@ final class ARSessionController: NSObject, ObservableObject {
             }
             self?.applyRelocalizationTimeoutIfNeeded()
         }
+
+        serverFallbackTask?.cancel()
+        if serverMapManifest != nil {
+            serverFallbackTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(
+                            Self.nativeRelocalizationAttemptDuration * 1_000_000_000
+                        )
+                    )
+                } catch {
+                    return
+                }
+                self?.beginServerRelocalizationFallbackIfNeeded()
+            }
+        }
+    }
+
+    private func beginServerRelocalizationFallbackIfNeeded() {
+        guard hasStarted,
+              phase != .tracking,
+              serverMapManifest != nil,
+              let sceneView else { return }
+        serverRelocalizationActive = true
+        serverPoseGate.reset()
+        serverMapFromWorld = nil
+        serverVerifiedLandmarks = []
+        serverQueryInFlight = false
+        nextServerFrameID = 0
+        lastServerQueryTimestamp = -.infinity
+        originAnchorSeen = false
+        pose = nil
+        confidence = .low
+        phase = .relocalizing
+        serverLocalizationDescription = "Starting local VIO for server matching"
+        statusMessage = "Native map was not found. Starting calibrated server matching…"
+        sceneView.session.run(
+            makeConfiguration(initialWorldMap: nil),
+            options: [.resetTracking, .removeExistingAnchors]
+        )
     }
 
     private func makeConfiguration(initialWorldMap: ARWorldMap?) -> ARWorldTrackingConfiguration {
@@ -421,12 +492,14 @@ final class ARSessionController: NSObject, ObservableObject {
             }
         }
 
+        let activeMapFromWorld = serverMapFromWorld ?? matrix_identity_float4x4
+        let activeMapFromCamera = CoordinateFrames.mapFromCamera(
+            mapFromWorld: activeMapFromWorld,
+            worldFromCamera: frame.camera.transform
+        )
         let cameraPose = CameraPose(
-            mapFromCamera: CoordinateFrames.mapFromCamera(
-                mapFromWorld: matrix_identity_float4x4,
-                worldFromCamera: frame.camera.transform
-            ),
-            eulerAngles: frame.camera.eulerAngles,
+            mapFromCamera: activeMapFromCamera,
+            eulerAngles: Self.eulerAngles(from: activeMapFromCamera),
             timestamp: frame.timestamp
         )
 
@@ -439,14 +512,256 @@ final class ARSessionController: NSObject, ObservableObject {
             captureMappingKeyframeIfNeeded(from: frame)
 
         case .relocalization:
-            updateRelocalizationState(
-                trackingState: frame.camera.trackingState,
-                cameraPose: cameraPose,
-                elapsedTime: currentRelocalizationElapsed
-            )
+            if serverRelocalizationActive {
+                updateServerRelocalizationTracking(
+                    frame: frame,
+                    cameraPose: cameraPose
+                )
+                submitServerLocalizationQueryIfNeeded(from: frame)
+            } else {
+                updateRelocalizationState(
+                    trackingState: frame.camera.trackingState,
+                    cameraPose: cameraPose,
+                    elapsedTime: currentRelocalizationElapsed
+                )
+            }
         }
 
         publishFeatureOverlay(from: frame)
+    }
+
+    private func updateServerRelocalizationTracking(
+        frame: ARFrame,
+        cameraPose: CameraPose
+    ) {
+        switch frame.camera.trackingState {
+        case .normal:
+            if serverMapFromWorld != nil {
+                if phase != .tracking { phase = .tracking }
+                if confidence != .high { confidence = .high }
+                publishPoseIfNeeded(cameraPose, force: pose == nil)
+                appendTrail(cameraPose.position)
+            } else {
+                if phase != .relocalizing { phase = .relocalizing }
+                if confidence != .low { confidence = .low }
+                if pose != nil { pose = nil }
+            }
+        case .limited:
+            if phase != .limited { phase = .limited }
+            if confidence != .low { confidence = .low }
+            if pose != nil { pose = nil }
+        case .notAvailable:
+            if confidence != .unavailable { confidence = .unavailable }
+            if pose != nil { pose = nil }
+        }
+    }
+
+    private func submitServerLocalizationQueryIfNeeded(from frame: ARFrame) {
+        guard !serverQueryInFlight,
+              let manifest = serverMapManifest,
+              case .normal = frame.camera.trackingState,
+              let rawFeaturePoints = frame.rawFeaturePoints,
+              rawFeaturePoints.points.count >= 150 else {
+            return
+        }
+        let queryInterval = serverMapFromWorld == nil
+            ? manifest.query.minimumQueryInterval
+            : max(2, manifest.query.minimumQueryInterval)
+        guard frame.timestamp - lastServerQueryTimestamp >= queryInterval else { return }
+
+        let capturedImage = frame.capturedImage
+        let capturedWidth = CVPixelBufferGetWidth(capturedImage)
+        let capturedHeight = CVPixelBufferGetHeight(capturedImage)
+        guard capturedWidth > 0, capturedHeight > 0 else { return }
+        let encodedWidth = min(manifest.query.maximumImageWidth, capturedWidth)
+        let encodedHeight = max(
+            1,
+            Int(
+                (Double(capturedHeight) * Double(encodedWidth) / Double(capturedWidth))
+                    .rounded()
+            )
+        )
+        let calibrationResolution = frame.camera.imageResolution
+        let scaleX = Float(encodedWidth) / Float(calibrationResolution.width)
+        let scaleY = Float(encodedHeight) / Float(calibrationResolution.height)
+        var scaledIntrinsics = frame.camera.intrinsics
+        scaledIntrinsics.columns.0.x *= scaleX
+        scaledIntrinsics.columns.1.y *= scaleY
+        scaledIntrinsics.columns.2.x *= scaleX
+        scaledIntrinsics.columns.2.y *= scaleY
+
+        nextServerFrameID &+= 1
+        let observation = FrameObservationEnvelope(
+            schemaVersion: FrameObservationEnvelope.currentSchemaVersion,
+            map: manifest.map,
+            sessionID: serverSessionID,
+            frameID: nextServerFrameID,
+            capturedAt: frame.timestamp,
+            image: EncodedImageGeometry(
+                width: encodedWidth,
+                height: encodedHeight,
+                orientation: .right,
+                camera: .rearWide
+            ),
+            intrinsics: Matrix3x3Record(scaledIntrinsics),
+            worldFromCamera: Matrix4x4Record(frame.camera.transform),
+            tracking: .normal,
+            // Depth samples are not sent in schema v1. Do not claim depth verification.
+            depth: nil
+        )
+        let context = keyframeCIContext
+        let jpegQuality = manifest.query.jpegQuality
+        let client = serverLocalizationClient
+
+        serverQueryInFlight = true
+        lastServerQueryTimestamp = frame.timestamp
+        let requestStartedAt = ProcessInfo.processInfo.systemUptime
+        serverLocalizationDescription = serverMapFromWorld == nil
+            ? "Encoding calibrated query \(observation.frameID)"
+            : "Refreshing verified PnP inliers"
+        if serverMapFromWorld == nil {
+            statusMessage = "Matching calibrated camera view to the connected map…"
+        }
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let input = CIImage(cvPixelBuffer: capturedImage)
+            let scale = CGFloat(encodedWidth) / input.extent.width
+            let resized = input.transformed(
+                by: CGAffineTransform(scaleX: scale, y: scale)
+            )
+            let imageData = context.jpegRepresentation(
+                of: resized,
+                colorSpace: CGColorSpaceCreateDeviceRGB(),
+                options: [
+                    kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption:
+                        jpegQuality
+                ]
+            )
+            guard let imageData else {
+                await self?.finishServerLocalizationQuery(
+                    response: nil,
+                    observation: observation,
+                    requestStartedAt: requestStartedAt,
+                    error: ServerLocalizationTransportError.invalidResponse
+                )
+                return
+            }
+            do {
+                let request = try ServerLocalizationRequest(
+                    observation: observation,
+                    jpegImage: imageData
+                )
+                let response = try await client.localize(
+                    request: request,
+                    manifest: manifest
+                )
+                await self?.finishServerLocalizationQuery(
+                    response: response,
+                    observation: observation,
+                    requestStartedAt: requestStartedAt,
+                    error: nil
+                )
+            } catch {
+                await self?.finishServerLocalizationQuery(
+                    response: nil,
+                    observation: observation,
+                    requestStartedAt: requestStartedAt,
+                    error: error
+                )
+            }
+        }
+    }
+
+    private func finishServerLocalizationQuery(
+        response: ServerLocalizationResponse?,
+        observation: FrameObservationEnvelope,
+        requestStartedAt: TimeInterval,
+        error: Error?
+    ) {
+        guard observation.sessionID == serverSessionID else { return }
+        serverQueryInFlight = false
+        guard hasStarted, serverRelocalizationActive else { return }
+        let roundTripDuration = max(
+            0,
+            ProcessInfo.processInfo.systemUptime - requestStartedAt
+        )
+        if let error {
+            benchmarkAccumulator.recordConnectedLocalizationQuery(
+                duration: roundTripDuration,
+                outcome: .transportFailure,
+                quality: nil
+            )
+            serverLocalizationDescription = serverMapFromWorld == nil
+                ? "Server query rejected"
+                : "Tracking locally • server unavailable"
+            if serverMapFromWorld == nil {
+                statusMessage = "Connected localization: \(error.localizedDescription)"
+            }
+            return
+        }
+        guard let response else { return }
+        do {
+            let policy = ServerLocalizationAcceptancePolicy()
+            try response.validate(for: observation)
+            guard policy.accepts(response) else {
+                serverPoseGate.reset()
+                benchmarkAccumulator.recordConnectedLocalizationQuery(
+                    duration: roundTripDuration,
+                    outcome: .rejected,
+                    quality: response.result.quality
+                )
+                if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
+                serverLocalizationDescription = "Weak server match rejected"
+                if serverMapFromWorld == nil {
+                    statusMessage = "The connected map match was below the verified PnP confidence threshold."
+                }
+                return
+            }
+            let bridge = try serverPoseGate.consider(
+                response: response,
+                observation: observation,
+                policy: policy
+            )
+            if let bridge {
+                benchmarkAccumulator.recordConnectedLocalizationQuery(
+                    duration: roundTripDuration,
+                    outcome: .confirmed,
+                    quality: response.result.quality
+                )
+                serverMapFromWorld = bridge
+                serverVerifiedLandmarks = response.inliers
+                phase = .tracking
+                confidence = .high
+                statusMessage = "Localized with \(response.inliers.count) verified PnP inliers."
+                serverLocalizationDescription = "Server PnP pose confirmed"
+                relocalizationTimeoutTask?.cancel()
+                relocalizationTimeoutTask = nil
+                serverFallbackTask?.cancel()
+                serverFallbackTask = nil
+            } else {
+                benchmarkAccumulator.recordConnectedLocalizationQuery(
+                    duration: roundTripDuration,
+                    outcome: .acceptedPendingConfirmation,
+                    quality: response.result.quality
+                )
+                serverLocalizationDescription = serverMapFromWorld == nil
+                    ? "PnP match 1 of 2 confirmed"
+                    : "Pose update awaiting confirmation"
+                if serverMapFromWorld == nil {
+                    statusMessage = "One strong map match found. Hold steady for confirmation…"
+                }
+            }
+        } catch {
+            serverPoseGate.reset()
+            benchmarkAccumulator.recordConnectedLocalizationQuery(
+                duration: roundTripDuration,
+                outcome: .rejected,
+                quality: response.result.quality
+            )
+            if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
+            serverLocalizationDescription = "Server result rejected"
+            if serverMapFromWorld == nil { statusMessage = error.localizedDescription }
+        }
     }
 
     private func updateRelocalizationState(
@@ -487,11 +802,26 @@ final class ARSessionController: NSObject, ObservableObject {
         if output.phase == .tracking {
             relocalizationTimeoutTask?.cancel()
             relocalizationTimeoutTask = nil
+            serverFallbackTask?.cancel()
+            serverFallbackTask = nil
+            serverLocalizationDescription = "Native ARWorldMap pose confirmed"
         }
     }
 
     private func applyRelocalizationTimeoutIfNeeded() {
         guard case .relocalization = mode, phase != .tracking else { return }
+        if serverRelocalizationActive {
+            serverRelocalizationActive = false
+            serverPoseGate.reset()
+            serverVerifiedLandmarks = []
+            serverMapFromWorld = nil
+            serverLocalizationDescription = "Connected localization timed out"
+            phase = .failed
+            confidence = .unavailable
+            pose = nil
+            statusMessage = "No verified native or connected-map pose was found within 45 seconds. Retry in a distinctive mapped view."
+            return
+        }
         let output = relocalizationMachine.update(
             tracking: .unavailable,
             originIsPresent: originAnchorSeen,
@@ -586,8 +916,9 @@ final class ARSessionController: NSObject, ObservableObject {
             )
         }
 
+        let usesServerPose = serverMapFromWorld != nil
         let verifiedPriorityIdentifiers: Set<UInt64>
-        if overlayState == .localized {
+        if overlayState == .localized, !usesServerPose {
             verifiedPriorityIdentifiers = Set(
                 visibleCandidates.lazy
                     .map(\.id)
@@ -608,23 +939,29 @@ final class ARSessionController: NSObject, ObservableObject {
                 position: candidate.position,
                 role: FeaturePointPresentation.role(
                     for: candidate.id,
-                    savedIdentifiers: savedFeatureIdentifiers,
+                    savedIdentifiers: usesServerPose ? [] : savedFeatureIdentifiers,
                     state: overlayState
                 )
             )
         }
-        let identityMatchCount = overlayState == .localized
+        let identityMatchCount = overlayState == .localized && !usesServerPose
             ? visibleCandidates.lazy.filter { self.savedFeatureIdentifiers.contains($0.id) }.count
             : 0
+        let serverPoints = projectServerVerifiedLandmarks(
+            frame: frame,
+            orientation: orientation,
+            viewportSize: viewportSize
+        )
 
         let snapshot = FeaturePointSnapshot(
-            points: projectedPoints,
+            points: projectedPoints + serverPoints,
             observedCount: sourceCount,
             visibleCount: visibleCandidates.count,
             rejectedBehindCameraCount: rejectedBehindCameraCount,
             rejectedInvalidProjectionCount: rejectedInvalidProjectionCount,
             rejectedOutsideViewportCount: rejectedOutsideViewportCount,
             mapIdentityMatchCount: identityMatchCount,
+            serverVerifiedInlierCount: serverPoints.count,
             timestamp: frame.timestamp
         )
         featurePointSnapshot = snapshot
@@ -640,10 +977,71 @@ final class ARSessionController: NSObject, ObservableObject {
             rejectedInvalidProjectionCount: 0,
             rejectedOutsideViewportCount: 0,
             mapIdentityMatchCount: 0,
+            serverVerifiedInlierCount: 0,
             timestamp: timestamp
         )
         if featurePointSnapshot != snapshot { featurePointSnapshot = snapshot }
         benchmarkAccumulator.recordFeatureSnapshot(snapshot)
+    }
+
+    private func projectServerVerifiedLandmarks(
+        frame: ARFrame,
+        orientation: UIInterfaceOrientation,
+        viewportSize: CGSize
+    ) -> [ScreenFeaturePoint] {
+        guard let mapFromWorld = serverMapFromWorld,
+              !serverVerifiedLandmarks.isEmpty else { return [] }
+        let worldFromMap = simd_inverse(mapFromWorld)
+        let cameraFromWorld = simd_inverse(frame.camera.transform)
+        var visible: [VisibleFeatureCandidate] = []
+        visible.reserveCapacity(serverVerifiedLandmarks.count)
+        for inlier in serverVerifiedLandmarks {
+            let mapPoint = SIMD4(
+                inlier.mapPosition.x,
+                inlier.mapPosition.y,
+                inlier.mapPosition.z,
+                1
+            )
+            let worldHomogeneous = simd_mul(worldFromMap, mapPoint)
+            let worldPoint = SIMD3(
+                worldHomogeneous.x,
+                worldHomogeneous.y,
+                worldHomogeneous.z
+            )
+            let cameraPoint = simd_mul(cameraFromWorld, SIMD4(worldPoint, 1))
+            guard cameraPoint.z < -0.05 else { continue }
+            let projected = frame.camera.projectPoint(
+                worldPoint,
+                orientation: orientation,
+                viewportSize: viewportSize
+            )
+            guard projected.x.isFinite,
+                  projected.y.isFinite,
+                  projected.x >= 0,
+                  projected.y >= 0,
+                  projected.x <= viewportSize.width,
+                  projected.y <= viewportSize.height else { continue }
+            visible.append(
+                VisibleFeatureCandidate(
+                    id: inlier.mapLandmarkID,
+                    position: SIMD2(
+                        Float(projected.x / viewportSize.width),
+                        Float(projected.y / viewportSize.height)
+                    )
+                )
+            )
+        }
+        return FeaturePointPresentation.selectVisibleCandidates(
+            visible,
+            maximumCount: Self.maximumPriorityFeaturePointCount,
+            priorityIdentifiers: []
+        ).map {
+            ScreenFeaturePoint(
+                id: $0.id,
+                position: $0.position,
+                role: .serverVerifiedInlier
+            )
+        }
     }
 
     private func updateTrackingDescription(_ state: ARCamera.TrackingState) {
@@ -922,6 +1320,13 @@ final class ARSessionController: NSObject, ObservableObject {
         case .limitedOther: return .limitedOther
         case .unavailable: return .unavailable
         }
+    }
+
+    private static func eulerAngles(from transform: simd_float4x4) -> SIMD3<Float> {
+        let pitch = atan2(transform.columns.1.z, transform.columns.2.z)
+        let yaw = asin(min(1, max(-1, -transform.columns.0.z)))
+        let roll = atan2(transform.columns.0.y, transform.columns.0.x)
+        return SIMD3(pitch, yaw, roll)
     }
 
     private static func highConfidenceFraction(in depthData: ARDepthData) -> Double? {
