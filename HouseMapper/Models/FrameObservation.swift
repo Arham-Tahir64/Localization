@@ -166,7 +166,10 @@ struct MappingKeyframeSelector: Sendable {
         minimumTranslationMeters: Float = 0.45,
         minimumRotationRadians: Float = 25 * .pi / 180,
         minimumTimeInterval: TimeInterval = 0.75,
-        minimumFeatureCount: Int = 250,
+        // This is only a capture-health floor. The desktop builder applies the
+        // actual ALIKED/LightGlue/triangulation gates, so do not require the
+        // unrelated public ARKit sparse cloud to already be dense.
+        minimumFeatureCount: Int = 80,
         maximumKeyframeCount: Int = 120
     ) {
         self.minimumTranslationMeters = max(0, minimumTranslationMeters)

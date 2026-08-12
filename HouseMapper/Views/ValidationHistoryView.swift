@@ -125,6 +125,33 @@ private struct ValidationDetailView: View {
                         LabeledContent("Saved mesh triangles", value: map.meshTriangleCount.formatted())
                         LabeledContent("Calibrated keyframes", value: map.keyframeCount.formatted())
                     }
+                    if let connected = benchmark.connectedLocalization {
+                        LabeledContent("Server queries", value: connected.queryCount.formatted())
+                        LabeledContent(
+                            "Accepted / confirmed",
+                            value: "\(connected.acceptedCount) / \(connected.confirmedCount)"
+                        )
+                        LabeledContent(
+                            "Vision rejects / transport failures",
+                            value: "\(connected.rejectedCount) / \(connected.transportFailureCount)"
+                        )
+                        LabeledContent(
+                            "Mean / max server RTT",
+                            value: String(
+                                format: "%.0f / %.0f ms",
+                                connected.meanRoundTripDuration * 1_000,
+                                connected.maximumRoundTripDuration * 1_000
+                            )
+                        )
+                        if let stages = connected.rejectionStageCounts, !stages.isEmpty {
+                            LabeledContent(
+                                "Rejection stages",
+                                value: stages.sorted(by: { $0.key < $1.key })
+                                    .map { "\($0.key): \($0.value)" }
+                                    .joined(separator: ", ")
+                            )
+                        }
+                    }
                 }
             }
 

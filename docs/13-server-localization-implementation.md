@@ -84,7 +84,7 @@ this exact conversion.
 Python 3.12 test environment using the exact dependency versions pinned in
 `server/pyproject.toml`:
 
-- 19 tests passed;
+- 23 tests passed;
 - metric three-view triangulation and low-parallax rejection;
 - 6DoF RANSAC PnP with 20% outliers and ARKit/OpenCV roundtrip;
 - package preservation plus extra-file, dimension, and symlink rejection;
@@ -93,6 +93,8 @@ Python 3.12 test environment using the exact dependency versions pinned in
 - bounded HTTP content-type, length, malformed JSON, health, and weak-result paths.
 
 See `docs/benchmarks/12-server-localization.md` for the required performance run.
+See `docs/benchmarks/13-evaluation-trace.md` for the replay/trace benchmark and
+the corrected iPhone query/rejection classification.
 
 ## Remaining accuracy work
 

@@ -84,8 +84,13 @@ The command prints an immutable map directory and the exact
 .server-venv/bin/housemapper-server serve /path/to/IMMUTABLE-SERVER-MAP \
   --backend learned \
   --device auto \
-  --port 8080
+  --port 8080 \
+  --trace-directory /private/path/to/housemapper-traces
 ```
+
+`--trace-directory` is optional and stores the exact query JPEGs and calibration
+for replay. It contains sensitive images of the mapped space; keep it outside the
+repository, do not sync it to a public service, and delete it after evaluation.
 
 Verify from another machine on the LAN if desired:
 
@@ -107,7 +112,21 @@ On the iPhone:
    reprojected through the current live ARKit pose.
 
 HTTP 422 means the current image did not produce strong enough geometry; no pose is
-published. A connection failure leaves native localization and local VIO available.
+published. Its stage is preserved separately from network failures in Validation
+History. A connection failure leaves native localization and local VIO available.
+
+Replay the captured set after any model, map, or threshold change:
+
+```sh
+.server-venv/bin/housemapper-server replay /path/to/IMMUTABLE-SERVER-MAP \
+  /private/path/to/housemapper-traces \
+  --backend learned --device auto \
+  --output replay-report.json
+```
+
+The command exits with status 3 if any accepted/rejected decision changes. A stable
+decision is not proof of correctness; checkpoint labels remain the external source
+of truth for physical pose error and false accepts.
 
 ## Test and benchmark
 

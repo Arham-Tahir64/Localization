@@ -93,4 +93,7 @@ iPhone 16 Pro frame-time, thermal, energy, or camera-performance results.
 - The connected visual retrieval → learned local matching → PnP/RANSAC backend is
   implemented in `server/`. Schema-v2 synchronized depth verification and held-out
   arbitrary-start accuracy trials remain required.
+- Connected learned-feature queries no longer depend on an arbitrary minimum
+  ARKit sparse-point count. HTTP 422 geometric misses are measured as vision
+  rejections with stage diagnostics, not mislabeled as network failures.
 - Run repeated iPhone 16 Pro accuracy, latency, memory, energy, and thermal trials.

@@ -34,6 +34,24 @@ class LocalizationMetrics:
     retrieval_seconds: float
     matching_seconds: float
     pnp_seconds: float
+    retrieved_keyframe_ids: tuple[str, ...]
+    retrieval_similarities: tuple[float, ...]
+
+    def json(self) -> dict[str, object]:
+        return {
+            "extractedKeypoints": self.extracted_keypoints,
+            "retrievedKeyframes": self.retrieved_keyframes,
+            "rawMatches": self.raw_matches,
+            "uniqueCorrespondences": self.unique_correspondences,
+            "inliers": self.inliers,
+            "medianReprojectionErrorPixels": self.median_reprojection_error_pixels,
+            "extractionMilliseconds": self.extraction_seconds * 1_000,
+            "retrievalMilliseconds": self.retrieval_seconds * 1_000,
+            "matchingMilliseconds": self.matching_seconds * 1_000,
+            "pnpMilliseconds": self.pnp_seconds * 1_000,
+            "retrievedKeyframeIDs": list(self.retrieved_keyframe_ids),
+            "retrievalSimilarities": list(self.retrieval_similarities),
+        }
 
 
 @dataclass(frozen=True)
@@ -65,14 +83,45 @@ class MetricVisualLocalizer:
         try:
             query = self.backend.extract(observation.decode_image())
         except MapBuildError as error:
-            raise LocalizationError(str(error)) from error
+            raise LocalizationError(str(error), stage="extraction") from error
         extraction_seconds = perf_counter() - extraction_start
+
+        def diagnostics(
+            *,
+            retrieved_keyframes: int = 0,
+            raw_matches: int = 0,
+            unique_correspondences: int = 0,
+            inliers: int = 0,
+            median_error: float | None = None,
+            retrieval_seconds: float = 0,
+            matching_seconds: float = 0,
+            pnp_seconds: float = 0,
+        ) -> dict[str, object]:
+            return {
+                "extractedKeypoints": len(query.keypoints),
+                "retrievedKeyframes": retrieved_keyframes,
+                "rawMatches": raw_matches,
+                "uniqueCorrespondences": unique_correspondences,
+                "inliers": inliers,
+                "medianReprojectionErrorPixels": median_error,
+                "extractionMilliseconds": extraction_seconds * 1_000,
+                "retrievalMilliseconds": retrieval_seconds * 1_000,
+                "matchingMilliseconds": matching_seconds * 1_000,
+                "pnpMilliseconds": pnp_seconds * 1_000,
+                "retrievedKeyframeIDs": list(retrieved_keyframe_ids),
+                "retrievalSimilarities": list(retrieval_similarities),
+            }
 
         retrieval_start = perf_counter()
         query_global = aggregate_vlad(query.descriptors, self.server_map.vlad_centers)
         similarity = self.server_map.retrieval_descriptors @ query_global
         retrieval_count = min(self.configuration.retrieval_count, len(similarity))
         retrieved = np.argsort(-similarity)[:retrieval_count]
+        retrieved_keyframe_ids = tuple(
+            str(self.server_map.keyframe_ids[int(index)]).upper()
+            for index in retrieved
+        )
+        retrieval_similarities = tuple(float(similarity[index]) for index in retrieved)
         retrieval_seconds = perf_counter() - retrieval_start
 
         matching_start = perf_counter()
@@ -86,7 +135,16 @@ class MetricVisualLocalizer:
             try:
                 matches = self.backend.match(query, database)
             except MapBuildError as error:
-                raise LocalizationError(str(error)) from error
+                raise LocalizationError(
+                    str(error),
+                    stage="matching",
+                    diagnostics=diagnostics(
+                        retrieved_keyframes=retrieval_count,
+                        raw_matches=raw_matches,
+                        retrieval_seconds=retrieval_seconds,
+                        matching_seconds=perf_counter() - matching_start,
+                    ),
+                ) from error
             raw_matches += len(matches.indices)
             landmark_ids = self.server_map.keyframe_landmark_ids(int(keyframe_index))
             retrieval_weight = max(0.05, float((similarity[keyframe_index] + 1) / 2))
@@ -130,7 +188,15 @@ class MetricVisualLocalizer:
         )
         if len(ordered) < self.configuration.minimum_correspondences:
             raise LocalizationError(
-                f"only {len(ordered)} unique 2D-to-3D matches; need {self.configuration.minimum_correspondences}"
+                f"only {len(ordered)} unique 2D-to-3D matches; need {self.configuration.minimum_correspondences}",
+                stage="correspondence",
+                diagnostics=diagnostics(
+                    retrieved_keyframes=retrieval_count,
+                    raw_matches=raw_matches,
+                    unique_correspondences=len(ordered),
+                    retrieval_seconds=retrieval_seconds,
+                    matching_seconds=perf_counter() - matching_start,
+                ),
             )
         query_indices = np.asarray([item[0] for item in ordered], dtype=np.int64)
         landmark_ids = np.asarray([item[1] for item in ordered], dtype=np.int64)
@@ -139,12 +205,26 @@ class MetricVisualLocalizer:
         matching_seconds = perf_counter() - matching_start
 
         pnp_start = perf_counter()
-        pnp = solve_metric_pnp(
-            image_points,
-            map_points,
-            observation.intrinsics,
-            maximum_reprojection_error_pixels=self.configuration.maximum_individual_reprojection_error_pixels,
-        )
+        try:
+            pnp = solve_metric_pnp(
+                image_points,
+                map_points,
+                observation.intrinsics,
+                maximum_reprojection_error_pixels=self.configuration.maximum_individual_reprojection_error_pixels,
+            )
+        except LocalizationError as error:
+            raise LocalizationError(
+                str(error),
+                stage="pnp",
+                diagnostics=diagnostics(
+                    retrieved_keyframes=retrieval_count,
+                    raw_matches=raw_matches,
+                    unique_correspondences=len(ordered),
+                    retrieval_seconds=retrieval_seconds,
+                    matching_seconds=matching_seconds,
+                    pnp_seconds=perf_counter() - pnp_start,
+                ),
+            ) from error
         pnp_seconds = perf_counter() - pnp_start
         inlier_count = len(pnp.inlier_indices)
         inlier_ratio = inlier_count / len(ordered)
@@ -153,11 +233,50 @@ class MetricVisualLocalizer:
         sorted_residuals = np.sort(pnp.residuals_pixels)
         median_error = float(sorted_residuals[len(sorted_residuals) // 2])
         if inlier_count < self.configuration.minimum_inliers:
-            raise LocalizationError(f"PnP has only {inlier_count} inliers")
+            raise LocalizationError(
+                f"PnP has only {inlier_count} inliers",
+                stage="verification",
+                diagnostics=diagnostics(
+                    retrieved_keyframes=retrieval_count,
+                    raw_matches=raw_matches,
+                    unique_correspondences=len(ordered),
+                    inliers=inlier_count,
+                    median_error=median_error,
+                    retrieval_seconds=retrieval_seconds,
+                    matching_seconds=matching_seconds,
+                    pnp_seconds=pnp_seconds,
+                ),
+            )
         if inlier_ratio < self.configuration.minimum_inlier_ratio:
-            raise LocalizationError(f"PnP inlier ratio {inlier_ratio:.3f} is too weak")
+            raise LocalizationError(
+                f"PnP inlier ratio {inlier_ratio:.3f} is too weak",
+                stage="verification",
+                diagnostics=diagnostics(
+                    retrieved_keyframes=retrieval_count,
+                    raw_matches=raw_matches,
+                    unique_correspondences=len(ordered),
+                    inliers=inlier_count,
+                    median_error=median_error,
+                    retrieval_seconds=retrieval_seconds,
+                    matching_seconds=matching_seconds,
+                    pnp_seconds=pnp_seconds,
+                ),
+            )
         if median_error > self.configuration.maximum_median_reprojection_error_pixels:
-            raise LocalizationError(f"PnP median reprojection error {median_error:.2f}px is too high")
+            raise LocalizationError(
+                f"PnP median reprojection error {median_error:.2f}px is too high",
+                stage="verification",
+                diagnostics=diagnostics(
+                    retrieved_keyframes=retrieval_count,
+                    raw_matches=raw_matches,
+                    unique_correspondences=len(ordered),
+                    inliers=inlier_count,
+                    median_error=median_error,
+                    retrieval_seconds=retrieval_seconds,
+                    matching_seconds=matching_seconds,
+                    pnp_seconds=pnp_seconds,
+                ),
+            )
 
         accepted_landmark_ids = landmark_ids[pnp.inlier_indices]
         accepted_image_points = image_points[pnp.inlier_indices]
@@ -209,5 +328,7 @@ class MetricVisualLocalizer:
             retrieval_seconds,
             matching_seconds,
             pnp_seconds,
+            retrieved_keyframe_ids,
+            retrieval_similarities,
         )
         return LocalizationOutput(response, metrics)

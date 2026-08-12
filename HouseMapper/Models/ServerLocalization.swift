@@ -278,7 +278,14 @@ actor ServerLocalizationHTTPClient {
             throw ServerLocalizationTransportError.invalidResponse
         }
         guard (200...299).contains(http.statusCode) else {
-            throw ServerLocalizationTransportError.httpStatus(http.statusCode)
+            let detail = try? await Self.readErrorDetail(
+                from: bytes,
+                expectedLength: response.expectedContentLength
+            )
+            throw ServerLocalizationTransportError.httpStatus(
+                http.statusCode,
+                detail: detail
+            )
         }
         guard let contentType = http.value(forHTTPHeaderField: "Content-Type")?
             .lowercased(),
@@ -307,6 +314,37 @@ actor ServerLocalizationHTTPClient {
         }
         try localizationRequest.validate(response: decoded)
         return decoded
+    }
+
+    private static func readErrorDetail(
+        from bytes: URLSession.AsyncBytes,
+        expectedLength: Int64
+    ) async throws -> ServerLocalizationErrorDetail? {
+        if expectedLength > Int64(maximumResponseByteCount) { return nil }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < maximumResponseByteCount else { return nil }
+            data.append(byte)
+        }
+        guard let decoded = try? JSONDecoder().decode(
+            ServerLocalizationErrorDetail.self,
+            from: data
+        ), decoded.isSafeForDisplay else { return nil }
+        return decoded
+    }
+}
+
+struct ServerLocalizationErrorDetail: Codable, Hashable, Sendable {
+    let detail: String
+    let stage: String?
+
+    var isSafeForDisplay: Bool {
+        let allowedStages: Set<String> = [
+            "extraction", "matching", "correspondence", "pnp", "verification"
+        ]
+        guard !detail.isEmpty, detail.count <= 500 else { return false }
+        guard let stage else { return true }
+        return allowedStages.contains(stage)
     }
 }
 
@@ -484,7 +522,7 @@ enum ServerLocalizationTransportError: LocalizedError, Equatable {
     case mapVersionMismatch
     case requestTooLarge
     case invalidResponse
-    case httpStatus(Int)
+    case httpStatus(Int, detail: ServerLocalizationErrorDetail?)
     case responseTooLarge
 
     var errorDescription: String? {
@@ -492,7 +530,8 @@ enum ServerLocalizationTransportError: LocalizedError, Equatable {
         case .mapVersionMismatch: return "The selected server endpoint belongs to another map version."
         case .requestTooLarge: return "The localization camera request is too large."
         case .invalidResponse: return "The localization server returned an invalid response."
-        case .httpStatus(let status): return "The localization server returned HTTP \(status)."
+        case .httpStatus(let status, let detail):
+            return detail?.detail ?? "The localization server returned HTTP \(status)."
         case .responseTooLarge: return "The localization server response exceeded the safety limit."
         }
     }

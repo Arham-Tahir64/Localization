@@ -9,6 +9,7 @@ import numpy as np
 
 from housemapper_server.contracts import MapReference, QueryObservation
 from housemapper_server.features import FeatureMatches, ImageFeatures
+from housemapper_server.errors import LocalizationError
 from housemapper_server.geometry import pose_delta, project_map_points
 from housemapper_server.localizer import LocalizationConfiguration, MetricVisualLocalizer
 from housemapper_server.map_store import ServerMap
@@ -98,6 +99,48 @@ def test_localizer_returns_real_metric_inliers_compatible_with_client_contract()
     assert translation < 1e-3
     assert math.degrees(rotation) < 0.01
     assert output.metrics.inliers == 80
+    assert output.metrics.retrieved_keyframe_ids == (
+        str(server_map.keyframe_ids[0]).upper(),
+        str(server_map.keyframe_ids[1]).upper(),
+    )
+    assert len(output.metrics.retrieval_similarities) == 2
     assert len(output.response["inliers"]) == 80
     assert output.response["result"]["verification"] == "visualPnP"
     assert output.response["result"]["quality"]["depthOverlapRatio"] is None
+
+
+def test_localizer_rejection_reports_the_measured_correspondence_stage() -> None:
+    rng = np.random.default_rng(12)
+    reference = MapReference(UUID(int=1), UUID(int=2))
+    intrinsics = np.array([[900, 0, 640], [0, 900, 480], [0, 0, 1]], dtype=float)
+    positions = np.column_stack((rng.uniform(-2, 2, 20), rng.uniform(-1, 1, 20), rng.uniform(-7, -3, 20))).astype(np.float32)
+    pixels, _ = project_map_points(positions, intrinsics, np.eye(4))
+    descriptors = rng.normal(size=(20, 16)).astype(np.float32)
+    descriptors /= np.linalg.norm(descriptors, axis=1, keepdims=True)
+    features = ImageFeatures(pixels, descriptors, np.ones(20, dtype=np.float32), np.ones(16, dtype=np.float32) / 4, (1280, 960))
+    server_map = ServerMap(
+        reference,
+        {"reconstruction": "metric", "retrieval": "vlad", "localFeatures": GeometricBackend.feature_identity, "matcher": GeometricBackend.matcher_identity},
+        (UUID(int=3), UUID(int=4)),
+        np.array([[1280, 960], [1280, 960]], dtype=np.int32),
+        np.array([0, 20, 40], dtype=np.int64),
+        np.concatenate((pixels, pixels)),
+        np.concatenate((descriptors, descriptors)),
+        np.tile(np.arange(1, 21, dtype=np.int64), 2),
+        np.ones((2, 64), dtype=np.float32) / 8,
+        np.zeros((4, 16), dtype=np.float32),
+        np.arange(1, 21, dtype=np.int64),
+        positions,
+        descriptors,
+        np.full(20, 2, dtype=np.int16),
+    )
+    localizer = MetricVisualLocalizer(server_map, GeometricBackend(features))
+
+    try:
+        localizer.localize(request(reference, intrinsics))
+        raise AssertionError("expected weak correspondence geometry to be rejected")
+    except LocalizationError as error:
+        assert error.stage == "correspondence"
+        assert error.diagnostics["extractedKeypoints"] == 20
+        assert error.diagnostics["rawMatches"] == 40
+        assert error.diagnostics["uniqueCorrespondences"] == 20

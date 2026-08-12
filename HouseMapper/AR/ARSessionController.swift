@@ -559,9 +559,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private func submitServerLocalizationQueryIfNeeded(from frame: ARFrame) {
         guard !serverQueryInFlight,
               let manifest = serverMapManifest,
-              case .normal = frame.camera.trackingState,
-              let rawFeaturePoints = frame.rawFeaturePoints,
-              rawFeaturePoints.points.count >= 150 else {
+              case .normal = frame.camera.trackingState else {
             return
         }
         let queryInterval = serverMapFromWorld == nil
@@ -686,13 +684,23 @@ final class ARSessionController: NSObject, ObservableObject {
             ProcessInfo.processInfo.systemUptime - requestStartedAt
         )
         if let error {
+            let outcome: ConnectedLocalizationQueryOutcome
+            var rejectionStage: String?
+            if let transportError = error as? ServerLocalizationTransportError,
+               case .httpStatus(422, let detail) = transportError {
+                outcome = .rejected
+                rejectionStage = detail?.stage
+            } else {
+                outcome = .transportFailure
+            }
             benchmarkAccumulator.recordConnectedLocalizationQuery(
                 duration: roundTripDuration,
-                outcome: .transportFailure,
-                quality: nil
+                outcome: outcome,
+                quality: nil,
+                rejectionStage: rejectionStage
             )
             serverLocalizationDescription = serverMapFromWorld == nil
-                ? "Server query rejected"
+                ? (outcome == .rejected ? "No verified map match" : "Server query failed")
                 : "Tracking locally • server unavailable"
             if serverMapFromWorld == nil {
                 statusMessage = "Connected localization: \(error.localizedDescription)"
@@ -708,7 +716,8 @@ final class ARSessionController: NSObject, ObservableObject {
                 benchmarkAccumulator.recordConnectedLocalizationQuery(
                     duration: roundTripDuration,
                     outcome: .rejected,
-                    quality: response.result.quality
+                    quality: response.result.quality,
+                    rejectionStage: "clientPolicy"
                 )
                 if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
                 serverLocalizationDescription = "Weak server match rejected"
@@ -756,7 +765,8 @@ final class ARSessionController: NSObject, ObservableObject {
             benchmarkAccumulator.recordConnectedLocalizationQuery(
                 duration: roundTripDuration,
                 outcome: .rejected,
-                quality: response.result.quality
+                quality: response.result.quality,
+                rejectionStage: "clientContract"
             )
             if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
             serverLocalizationDescription = "Server result rejected"

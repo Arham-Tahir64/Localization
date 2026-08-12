@@ -95,6 +95,38 @@ final class ValidationRecordTests: XCTestCase {
         XCTAssertEqual(decoded.map?.keyframeCount, 42)
     }
 
+    func testConnectedBenchmarkSeparatesVisionRejectionStagesFromTransportFailures() {
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+        var accumulator = SessionBenchmarkAccumulator(startedAt: startedAt)
+        accumulator.recordConnectedLocalizationQuery(
+            duration: 0.62,
+            outcome: .rejected,
+            quality: nil,
+            rejectionStage: "correspondence"
+        )
+        accumulator.recordConnectedLocalizationQuery(
+            duration: 0.04,
+            outcome: .transportFailure,
+            quality: nil
+        )
+
+        let report = accumulator.makeReport(
+            mode: .relocalization,
+            completedAt: startedAt.addingTimeInterval(1),
+            deviceModel: "iPhone17,1",
+            systemVersion: "26.6",
+            appVersion: "1.0"
+        )
+
+        XCTAssertEqual(report.connectedLocalization?.queryCount, 2)
+        XCTAssertEqual(report.connectedLocalization?.rejectedCount, 1)
+        XCTAssertEqual(report.connectedLocalization?.transportFailureCount, 1)
+        XCTAssertEqual(
+            report.connectedLocalization?.rejectionStageCounts?["correspondence"],
+            1
+        )
+    }
+
     func testZeroFeatureSamplesReduceMeanInsteadOfBeingDropped() {
         let startedAt = Date(timeIntervalSince1970: 1_000)
         var accumulator = SessionBenchmarkAccumulator(startedAt: startedAt)

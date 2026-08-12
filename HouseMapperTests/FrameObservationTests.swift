@@ -3,6 +3,48 @@ import simd
 @testable import HouseMapper
 
 final class FrameObservationTests: XCTestCase {
+    func testServerErrorDetailBoundsUntrustedDisplayTextAndStages() {
+        XCTAssertTrue(
+            ServerLocalizationErrorDetail(
+                detail: "not enough geometry",
+                stage: "correspondence"
+            ).isSafeForDisplay
+        )
+        XCTAssertFalse(
+            ServerLocalizationErrorDetail(
+                detail: String(repeating: "x", count: 501),
+                stage: "pnp"
+            ).isSafeForDisplay
+        )
+        XCTAssertFalse(
+            ServerLocalizationErrorDetail(
+                detail: "internal path",
+                stage: "stackTrace"
+            ).isSafeForDisplay
+        )
+    }
+
+    func testDefaultKeyframeSelectorDoesNotTreatARKitSparseCloudAsLearnedFeatures() {
+        var selector = MappingKeyframeSelector()
+
+        XCTAssertFalse(
+            selector.reserveIfEligible(
+                timestamp: 1,
+                mapFromCamera: matrix_identity_float4x4,
+                tracking: .normal,
+                featureCount: 79
+            )
+        )
+        XCTAssertTrue(
+            selector.reserveIfEligible(
+                timestamp: 1,
+                mapFromCamera: matrix_identity_float4x4,
+                tracking: .normal,
+                featureCount: 80
+            )
+        )
+    }
+
     func testKeyframeSelectorUsesMetricTranslationRotationAndQualityGates() {
         var selector = MappingKeyframeSelector(
             minimumTranslationMeters: 0.5,

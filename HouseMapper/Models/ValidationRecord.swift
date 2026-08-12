@@ -200,6 +200,7 @@ struct ConnectedLocalizationBenchmarkMetrics: Codable, Hashable, Sendable {
     let latestInlierCount: Int?
     let latestInlierRatio: Float?
     let latestMedianReprojectionErrorPixels: Float?
+    let rejectionStageCounts: [String: Int]?
 }
 
 struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {
@@ -297,6 +298,7 @@ struct SessionBenchmarkAccumulator: Sendable {
     private var connectedRoundTripDurationTotal: TimeInterval = 0
     private var connectedMaximumRoundTripDuration: TimeInterval = 0
     private var latestConnectedQuality: LocalizationQualityRecord?
+    private var connectedRejectionStageCounts: [String: Int] = [:]
 
     init(sessionID: UUID = UUID(), startedAt: Date) {
         self.sessionID = sessionID
@@ -349,7 +351,8 @@ struct SessionBenchmarkAccumulator: Sendable {
     mutating func recordConnectedLocalizationQuery(
         duration: TimeInterval,
         outcome: ConnectedLocalizationQueryOutcome,
-        quality: LocalizationQualityRecord?
+        quality: LocalizationQualityRecord?,
+        rejectionStage: String? = nil
     ) {
         guard duration.isFinite, duration >= 0 else { return }
         connectedQueryCount += 1
@@ -360,6 +363,11 @@ struct SessionBenchmarkAccumulator: Sendable {
             connectedTransportFailureCount += 1
         case .rejected:
             connectedRejectedCount += 1
+            if let rejectionStage,
+               !rejectionStage.isEmpty,
+               rejectionStage.count <= 80 {
+                connectedRejectionStageCounts[rejectionStage, default: 0] += 1
+            }
         case .acceptedPendingConfirmation:
             connectedAcceptedCount += 1
         case .confirmed:
@@ -420,7 +428,10 @@ struct SessionBenchmarkAccumulator: Sendable {
                 maximumRoundTripDuration: connectedMaximumRoundTripDuration,
                 latestInlierCount: latestConnectedQuality?.inlierCount,
                 latestInlierRatio: latestConnectedQuality?.inlierRatio,
-                latestMedianReprojectionErrorPixels: latestConnectedQuality?.medianReprojectionErrorPixels
+                latestMedianReprojectionErrorPixels: latestConnectedQuality?.medianReprojectionErrorPixels,
+                rejectionStageCounts: connectedRejectionStageCounts.isEmpty
+                    ? nil
+                    : connectedRejectionStageCounts
             )
         } else {
             connectedLocalization = nil

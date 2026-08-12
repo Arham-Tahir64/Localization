@@ -1,0 +1,9 @@
+{
+  "iterations": 100,
+  "kind": "host-trace-storage-overhead-not-iphone",
+  "maximumMilliseconds": 2.993584144860506,
+  "medianMilliseconds": 1.5839585103094578,
+  "p95Milliseconds": 2.309042029082775,
+  "requestBytes": 1094910,
+  "storedBytes": 109547500
+}

@@ -9,3 +9,5 @@ __pycache__/
 *.egg-info/
 .server-venv/
 server-maps/
+housemapper-traces/
+replay-report.json
