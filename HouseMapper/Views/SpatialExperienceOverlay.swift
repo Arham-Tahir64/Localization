@@ -31,7 +31,7 @@ struct SpatialFeatureOverlay: View {
 
             context.fill(scanningPath, with: .color(.cyan.opacity(0.76)))
             context.fill(seekingPath, with: .color(.white.opacity(0.54)))
-            context.fill(supportPath, with: .color(.green.opacity(0.72)))
+            context.fill(supportPath, with: .color(.cyan.opacity(0.72)))
             context.fill(matchGlowPath, with: .color(.green.opacity(0.15)))
             context.fill(matchCorePath, with: .color(.green))
         }
@@ -127,6 +127,8 @@ struct SpatialStatusCapsule: View {
     let title: String
     let detail: String
     let featureCount: Int
+    let visibleFeatureCount: Int
+    let sourceFeatureCount: Int
     let matchCount: Int
     let color: Color
 
@@ -152,7 +154,11 @@ struct SpatialStatusCapsule: View {
             VStack(alignment: .trailing, spacing: 1) {
                 Text(featureCount.formatted())
                     .font(.caption.monospacedDigit().bold())
-                Text(matchCount > 0 ? "\(matchCount) ID matches" : "live features")
+                Text(
+                    matchCount > 0
+                        ? "\(matchCount) restored IDs"
+                        : "\(visibleFeatureCount)/\(sourceFeatureCount) visible"
+                )
                     .font(.caption2)
                     .foregroundStyle(matchCount > 0 ? color : .white.opacity(0.52))
             }

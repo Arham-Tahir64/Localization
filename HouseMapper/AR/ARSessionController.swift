@@ -15,10 +15,11 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var mappingProgress: Double = 0
     @Published private(set) var featurePointCount = 0
     @Published private(set) var featurePointSnapshot = FeaturePointSnapshot.empty
+    @Published private(set) var captureDescription = "Measuring camera"
     @Published private(set) var depthDescription = "Waiting for LiDAR"
     @Published private(set) var meshDescription = "Checking support"
     @Published private(set) var pose: CameraPose?
-    @Published private(set) var mapPoints: [SIMD2<Float>] = []
+    @Published private(set) var mapRenderSnapshot = SpatialMapRenderSnapshot.empty
     @Published private(set) var trail: [SIMD2<Float>] = []
     @Published private(set) var elapsedRelocalization: TimeInterval = 0
     @Published private(set) var statusMessage: String?
@@ -35,7 +36,6 @@ final class ARSessionController: NSObject, ObservableObject {
     private var hasSceneReconstruction = false
     private var originAnchorSeen = false
     private var relocalizationMachine = RelocalizationStateMachine()
-    private var frameCount = 0
     private var relocalizationStartUptime: TimeInterval?
     private var relocalizationTimeoutTask: Task<Void, Never>?
     private var lastDepthInspection = Date.distantPast
@@ -44,9 +44,12 @@ final class ARSessionController: NSObject, ObservableObject {
     private var lastDiagnosticPublicationTimestamp: TimeInterval = -.infinity
     private var lastFeatureOverlayTimestamp: TimeInterval = -.infinity
     private var lastCoveragePublicationTimestamp: TimeInterval = -.infinity
-    private var coverageGrid: Set<GridKey> = []
-    private var coverageRenderPoints: [SIMD2<Float>] = []
     private var loadedWorldMap: ARWorldMap?
+    private var loadedSpatialMap: SpatialMapSnapshot?
+    private var mappingLandmarks = MappingLandmarkAccumulator(
+        maximumRetainedLandmarks: 50_000
+    )
+    private var captureDiagnostics = CaptureDiagnosticsAccumulator()
     private var savedFeatureIdentifiers: Set<UInt64> = []
     private var lastMeshUpdateByAnchor: [UUID: TimeInterval] = [:]
     private lazy var meshVisualizationMaterial: SCNMaterial = {
@@ -63,7 +66,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static let coveragePublicationInterval: TimeInterval = 0.5
     private static let meshUpdateInterval: TimeInterval = 0.2
     private static let timeoutFallbackGrace: TimeInterval = 0.25
-    private static let maximumOverviewPointCount = 1_000
+    private static let maximumMapRenderPointCount = 4_000
     private static let maximumScreenFeaturePointCount = 240
     private static let maximumPriorityFeaturePointCount = 120
 
@@ -122,12 +125,14 @@ final class ARSessionController: NSObject, ObservableObject {
                 guard let self else { return }
                 do {
                     let worldMap = try await mapLibrary.loadWorldMap(from: package)
+                    let spatialMap = try await mapLibrary.loadSpatialMap(from: package)
                     guard self.hasStarted else { return }
                     self.loadedWorldMap = worldMap
-                    self.savedFeatureIdentifiers = Set(worldMap.rawFeaturePoints.identifiers)
-                    self.mapPoints = Self.overviewPoints(
-                        from: worldMap.rawFeaturePoints.points,
-                        maximumCount: Self.maximumOverviewPointCount
+                    self.loadedSpatialMap = spatialMap
+                    self.savedFeatureIdentifiers = Set(spatialMap.landmarks.map(\.id))
+                    self.mapRenderSnapshot = SpatialMapRenderSnapshot.make(
+                        landmarks: spatialMap.landmarks,
+                        maximumCount: Self.maximumMapRenderPointCount
                     )
                     self.beginRelocalization(with: worldMap)
                 } catch {
@@ -172,13 +177,19 @@ final class ARSessionController: NSObject, ObservableObject {
             }
 
             let now = Date()
+            let mapID = UUID()
+            let spatialMap = try SpatialMapSnapshot(
+                mapID: mapID,
+                points: worldMap.rawFeaturePoints.points,
+                identifiers: worldMap.rawFeaturePoints.identifiers
+            )
             let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             let fallbackName = now.formatted(
                 .dateTime.year().month().day().hour().minute()
             )
             let metadata = MapMetadata(
                 schemaVersion: MapMetadata.currentSchemaVersion,
-                id: UUID(),
+                id: mapID,
                 name: trimmedName.isEmpty ? "House \(fallbackName)" : trimmedName,
                 createdAt: now,
                 updatedAt: now,
@@ -196,15 +207,20 @@ final class ARSessionController: NSObject, ObservableObject {
                     y: worldMap.extent.y,
                     z: worldMap.extent.z
                 ),
-                featurePointCount: worldMap.rawFeaturePoints.points.count,
+                featurePointCount: spatialMap.landmarks.count,
                 hasSceneDepth: hasDepth,
                 hasSceneReconstruction: hasSceneReconstruction
             )
             let previewData = sceneView.snapshot().jpegData(compressionQuality: 0.78)
             let package = try await mapLibrary.save(
                 worldMap: worldMap,
+                spatialMap: spatialMap,
                 metadata: metadata,
                 previewData: previewData
+            )
+            mapRenderSnapshot = SpatialMapRenderSnapshot.make(
+                landmarks: spatialMap.landmarks,
+                maximumCount: Self.maximumMapRenderPointCount
             )
             savedPackage = package
             statusMessage = "Map saved locally."
@@ -304,7 +320,14 @@ final class ARSessionController: NSObject, ObservableObject {
     }
 
     private func consume(frame: ARFrame) {
-        frameCount += 1
+        let imageResolution = frame.camera.imageResolution
+        if let captureSnapshot = captureDiagnostics.record(
+            timestamp: frame.timestamp,
+            imageWidth: Int(imageResolution.width),
+            imageHeight: Int(imageResolution.height)
+        ), captureDescription != captureSnapshot.description {
+            captureDescription = captureSnapshot.description
+        }
         updateTrackingDescription(frame.camera.trackingState)
         if frame.timestamp - lastDiagnosticPublicationTimestamp >= Self.diagnosticPublicationInterval {
             lastDiagnosticPublicationTimestamp = frame.timestamp
@@ -338,7 +361,7 @@ final class ARSessionController: NSObject, ObservableObject {
             publishPoseIfNeeded(cameraPose)
             if confidence != .unavailable { confidence = .unavailable }
             appendTrail(cameraPose.position)
-            accumulateCoverage(from: frame)
+            publishSpatialMapSnapshotIfNeeded(from: frame)
 
         case .relocalization:
             updateRelocalizationState(
@@ -433,23 +456,6 @@ final class ARSessionController: NSObject, ObservableObject {
             return
         }
 
-        var priorityIndices: [Int] = []
-        priorityIndices.reserveCapacity(Self.maximumPriorityFeaturePointCount)
-        var identityMatchCount = 0
-        if !savedFeatureIdentifiers.isEmpty {
-            for index in 0..<sourceCount where savedFeatureIdentifiers.contains(identifiers[index]) {
-                identityMatchCount += 1
-                if priorityIndices.count < Self.maximumPriorityFeaturePointCount {
-                    priorityIndices.append(index)
-                }
-            }
-        }
-
-        let sampledIndices = FeaturePointPresentation.sampledIndices(
-            count: sourceCount,
-            maximumCount: Self.maximumScreenFeaturePointCount,
-            priorityIndices: priorityIndices
-        )
         let viewportSize = sceneView.bounds.size
         let orientation = sceneView.window?.windowScene?.interfaceOrientation ?? .portrait
         let cameraFromWorld = simd_inverse(frame.camera.transform)
@@ -461,50 +467,88 @@ final class ARSessionController: NSObject, ObservableObject {
             overlayState = phase == .tracking ? .localized : .seekingMap
         }
 
-        var projectedPoints: [ScreenFeaturePoint] = []
-        projectedPoints.reserveCapacity(sampledIndices.count)
-        for index in sampledIndices {
+        var visibleCandidates: [VisibleFeatureCandidate] = []
+        visibleCandidates.reserveCapacity(sourceCount)
+        var rejectedBehindCameraCount = 0
+        var rejectedInvalidProjectionCount = 0
+        var rejectedOutsideViewportCount = 0
+        for index in 0..<sourceCount {
             let worldPoint = points[index]
             let cameraPoint = simd_mul(
                 cameraFromWorld,
                 SIMD4(worldPoint.x, worldPoint.y, worldPoint.z, 1)
             )
-            guard cameraPoint.z < -0.05 else { continue }
+            guard cameraPoint.z < -0.05 else {
+                rejectedBehindCameraCount += 1
+                continue
+            }
 
             let projected = frame.camera.projectPoint(
                 worldPoint,
                 orientation: orientation,
                 viewportSize: viewportSize
             )
-            guard projected.x.isFinite,
-                  projected.y.isFinite,
-                  projected.x >= 0,
+            guard projected.x.isFinite, projected.y.isFinite else {
+                rejectedInvalidProjectionCount += 1
+                continue
+            }
+            guard projected.x >= 0,
                   projected.y >= 0,
                   projected.x <= viewportSize.width,
                   projected.y <= viewportSize.height else {
+                rejectedOutsideViewportCount += 1
                 continue
             }
 
-            let identifier = identifiers[index]
-            projectedPoints.append(
-                ScreenFeaturePoint(
-                    id: identifier,
+            visibleCandidates.append(
+                VisibleFeatureCandidate(
+                    id: identifiers[index],
                     position: SIMD2(
                         Float(projected.x / viewportSize.width),
                         Float(projected.y / viewportSize.height)
-                    ),
-                    role: FeaturePointPresentation.role(
-                        for: identifier,
-                        savedIdentifiers: savedFeatureIdentifiers,
-                        state: overlayState
                     )
                 )
             )
         }
 
+        let verifiedPriorityIdentifiers: Set<UInt64>
+        if overlayState == .localized {
+            verifiedPriorityIdentifiers = Set(
+                visibleCandidates.lazy
+                    .map(\.id)
+                    .filter(savedFeatureIdentifiers.contains)
+                    .prefix(Self.maximumPriorityFeaturePointCount)
+            )
+        } else {
+            verifiedPriorityIdentifiers = []
+        }
+        let selectedCandidates = FeaturePointPresentation.selectVisibleCandidates(
+            visibleCandidates,
+            maximumCount: Self.maximumScreenFeaturePointCount,
+            priorityIdentifiers: verifiedPriorityIdentifiers
+        )
+        let projectedPoints = selectedCandidates.map { candidate in
+            ScreenFeaturePoint(
+                id: candidate.id,
+                position: candidate.position,
+                role: FeaturePointPresentation.role(
+                    for: candidate.id,
+                    savedIdentifiers: savedFeatureIdentifiers,
+                    state: overlayState
+                )
+            )
+        }
+        let identityMatchCount = overlayState == .localized
+            ? visibleCandidates.lazy.filter { self.savedFeatureIdentifiers.contains($0.id) }.count
+            : 0
+
         featurePointSnapshot = FeaturePointSnapshot(
             points: projectedPoints,
             observedCount: sourceCount,
+            visibleCount: visibleCandidates.count,
+            rejectedBehindCameraCount: rejectedBehindCameraCount,
+            rejectedInvalidProjectionCount: rejectedInvalidProjectionCount,
+            rejectedOutsideViewportCount: rejectedOutsideViewportCount,
             mapIdentityMatchCount: identityMatchCount,
             timestamp: frame.timestamp
         )
@@ -571,30 +615,20 @@ final class ARSessionController: NSObject, ObservableObject {
         }
     }
 
-    private func accumulateCoverage(from frame: ARFrame) {
-        guard frameCount.isMultiple(of: 8),
-              coverageGrid.count < Self.maximumOverviewPointCount,
-              let points = frame.rawFeaturePoints?.points else { return }
+    private func publishSpatialMapSnapshotIfNeeded(from frame: ARFrame) {
+        guard frame.timestamp - lastCoveragePublicationTimestamp >= Self.coveragePublicationInterval,
+              let pointCloud = frame.rawFeaturePoints else { return }
+        lastCoveragePublicationTimestamp = frame.timestamp
 
-        var addedPoint = false
-        let step = max(1, points.count / 120)
-        for index in Swift.stride(from: 0, to: points.count, by: step) {
-            let point = points[index]
-            let key = GridKey(
-                x: Int((point.x / 0.20).rounded()),
-                z: Int((point.z / 0.20).rounded())
-            )
-            if coverageGrid.insert(key).inserted {
-                coverageRenderPoints.append(SIMD2(Float(key.x) * 0.20, Float(key.z) * 0.20))
-                addedPoint = true
-            }
-            if coverageGrid.count >= Self.maximumOverviewPointCount { break }
-        }
-        if addedPoint,
-           frame.timestamp - lastCoveragePublicationTimestamp >= Self.coveragePublicationInterval
-            || coverageGrid.count >= Self.maximumOverviewPointCount {
-            lastCoveragePublicationTimestamp = frame.timestamp
-            mapPoints = coverageRenderPoints
+        mappingLandmarks.integrate(
+            points: pointCloud.points,
+            identifiers: pointCloud.identifiers
+        )
+        let snapshot = mappingLandmarks.renderSnapshot(
+            maximumCount: Self.maximumMapRenderPointCount
+        )
+        if snapshot != mapRenderSnapshot {
+            mapRenderSnapshot = snapshot
         }
     }
 
@@ -636,22 +670,6 @@ final class ARSessionController: NSObject, ObservableObject {
         if depthDescription != detail { depthDescription = detail }
     }
 
-    private static func overviewPoints(
-        from points: [SIMD3<Float>],
-        maximumCount: Int
-    ) -> [SIMD2<Float>] {
-        guard points.count > maximumCount else {
-            return points.map { SIMD2($0.x, $0.z) }
-        }
-        let strideSize = max(1, points.count / maximumCount)
-        var result: [SIMD2<Float>] = []
-        result.reserveCapacity(maximumCount)
-        for index in Swift.stride(from: 0, to: points.count, by: strideSize) {
-            result.append(SIMD2(points[index].x, points[index].z))
-            if result.count == maximumCount { break }
-        }
-        return result
-    }
 }
 
 extension ARSessionController: @preconcurrency ARSessionDelegate {

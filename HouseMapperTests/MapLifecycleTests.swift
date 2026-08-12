@@ -86,6 +86,65 @@ final class MapLifecycleTests: XCTestCase {
         XCTAssertEqual(library.maps.first?.id, package.id)
     }
 
+    func testLoadSpatialMapReturnsExactStoredSnapshot() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let mapID = UUID()
+        let snapshot = try SpatialMapSnapshot(
+            mapID: mapID,
+            landmarks: [
+                SpatialLandmarkRecord(
+                    id: 42,
+                    position: Vector3Record(x: 1, y: 2, z: 3)
+                )
+            ]
+        )
+        _ = try writePackage(
+            inside: fixture.maps,
+            metadataID: mapID,
+            featurePointCount: 1,
+            spatialMap: try SpatialMapSnapshotCodec.encode(snapshot)
+        )
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+
+        let loaded = try await library.loadSpatialMap(from: package)
+
+        XCTAssertEqual(loaded, snapshot)
+    }
+
+    func testLoadSpatialMapRejectsMetadataPayloadCountMismatch() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let mapID = UUID()
+        let snapshot = try SpatialMapSnapshot(
+            mapID: mapID,
+            landmarks: [
+                SpatialLandmarkRecord(
+                    id: 42,
+                    position: Vector3Record(x: 1, y: 2, z: 3)
+                )
+            ]
+        )
+        _ = try writePackage(
+            inside: fixture.maps,
+            metadataID: mapID,
+            featurePointCount: 2,
+            spatialMap: try SpatialMapSnapshotCodec.encode(snapshot)
+        )
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+
+        do {
+            _ = try await library.loadSpatialMap(from: package)
+            XCTFail("Expected a mismatched spatial payload to be rejected")
+        } catch let error as MapLibraryError {
+            guard case .spatialMapFeatureCountMismatch(expected: 2, actual: 1) = error else {
+                return XCTFail("Unexpected map error: \(error)")
+            }
+        }
+    }
+
     private func makeFixture() throws -> (root: URL, maps: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MapLifecycleTests-\(UUID().uuidString)", isDirectory: true)
@@ -100,7 +159,9 @@ final class MapLifecycleTests: XCTestCase {
         metadataID: UUID = UUID(),
         directoryID: UUID? = nil,
         worldMap: Data = Data("world-map".utf8),
-        preview: Data = Data("preview".utf8)
+        preview: Data = Data("preview".utf8),
+        featurePointCount: Int = 10,
+        spatialMap: Data? = nil
     ) throws -> MapPackage {
         let directory = parent.appendingPathComponent(
             (directoryID ?? metadataID).uuidString,
@@ -108,7 +169,11 @@ final class MapLifecycleTests: XCTestCase {
         )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let metadata = makeMetadata(id: metadataID, name: name)
+        let metadata = makeMetadata(
+            id: metadataID,
+            name: name,
+            featurePointCount: featurePointCount
+        )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(metadata).write(
@@ -117,10 +182,17 @@ final class MapLifecycleTests: XCTestCase {
         )
         try worldMap.write(to: directory.appendingPathComponent("worldmap.arexperience"))
         try preview.write(to: directory.appendingPathComponent("preview.jpg"))
+        if let spatialMap {
+            try spatialMap.write(to: directory.appendingPathComponent("spatial-map.plist"))
+        }
         return MapPackage(metadata: metadata, directoryURL: directory)
     }
 
-    private func makeMetadata(id: UUID, name: String) -> MapMetadata {
+    private func makeMetadata(
+        id: UUID,
+        name: String,
+        featurePointCount: Int
+    ) -> MapMetadata {
         MapMetadata(
             schemaVersion: MapMetadata.currentSchemaVersion,
             id: id,
@@ -133,7 +205,7 @@ final class MapLifecycleTests: XCTestCase {
             backend: "ARWorldMap",
             center: Vector3Record(x: 0, y: 0, z: 0),
             extent: Vector3Record(x: 1, y: 1, z: 1),
-            featurePointCount: 10,
+            featurePointCount: featurePointCount,
             hasSceneDepth: true,
             hasSceneReconstruction: true
         )
@@ -157,5 +229,63 @@ final class MapLifecycleTests: XCTestCase {
         } catch {
             // Any validation failure is sufficient; the survival assertion verifies safety.
         }
+    }
+}
+
+final class SpatialMapSnapshotTests: XCTestCase {
+    func testBinaryRoundTripPreservesEveryLandmarkAndBounds() throws {
+        let mapID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let landmarks = [
+            SpatialLandmarkRecord(id: 10, position: Vector3Record(x: -2, y: 1, z: 4)),
+            SpatialLandmarkRecord(id: 20, position: Vector3Record(x: 3, y: -1, z: 8)),
+            SpatialLandmarkRecord(id: 30, position: Vector3Record(x: 0, y: 5, z: -6))
+        ]
+        let snapshot = try SpatialMapSnapshot(mapID: mapID, landmarks: landmarks)
+
+        let encoded = try SpatialMapSnapshotCodec.encode(snapshot)
+        let decoded = try SpatialMapSnapshotCodec.decode(encoded, expectedMapID: mapID)
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.landmarks, landmarks)
+        XCTAssertEqual(decoded.bounds.minimum, Vector3Record(x: -2, y: -1, z: -6))
+        XCTAssertEqual(decoded.bounds.maximum, Vector3Record(x: 3, y: 5, z: 8))
+    }
+
+    func testDecodeRejectsSnapshotBelongingToAnotherMap() throws {
+        let storedID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let requestedID = UUID(uuidString: "00000000-1111-2222-3333-444444444444")!
+        let snapshot = try SpatialMapSnapshot(
+            mapID: storedID,
+            landmarks: [
+                SpatialLandmarkRecord(
+                    id: 1,
+                    position: Vector3Record(x: 0, y: 0, z: 0)
+                )
+            ]
+        )
+
+        let encoded = try SpatialMapSnapshotCodec.encode(snapshot)
+
+        XCTAssertThrowsError(
+            try SpatialMapSnapshotCodec.decode(encoded, expectedMapID: requestedID)
+        )
+    }
+
+    func testSnapshotRejectsDuplicateLandmarkIdentifiers() {
+        XCTAssertThrowsError(
+            try SpatialMapSnapshot(
+                mapID: UUID(),
+                landmarks: [
+                    SpatialLandmarkRecord(
+                        id: 7,
+                        position: Vector3Record(x: 0, y: 0, z: 0)
+                    ),
+                    SpatialLandmarkRecord(
+                        id: 7,
+                        position: Vector3Record(x: 1, y: 1, z: 1)
+                    )
+                ]
+            )
+        )
     }
 }

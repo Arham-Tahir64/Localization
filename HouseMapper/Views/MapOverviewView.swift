@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct MapOverviewView: View {
-    let mapPoints: [SIMD2<Float>]
+    let map: SpatialMapRenderSnapshot
     let trail: [SIMD2<Float>]
     let pose: CameraPose?
     let accentColor: Color
@@ -22,7 +22,10 @@ struct MapOverviewView: View {
                 maxZ = max(maxZ, point.y)
             }
 
-            mapPoints.forEach(include)
+            if map.sourceCount > 0 {
+                include(SIMD2(map.bounds.minimum.x, map.bounds.minimum.z))
+                include(SIMD2(map.bounds.maximum.x, map.bounds.maximum.z))
+            }
             for index in Swift.stride(from: 0, to: trail.count, by: trailStep) {
                 include(trail[index])
             }
@@ -30,7 +33,7 @@ struct MapOverviewView: View {
 
             guard minX.isFinite else {
                 context.draw(
-                    Text("Map appears as you move")
+                    Text("Landmarks appear as you move")
                         .font(.caption)
                         .foregroundStyle(.secondary),
                     at: CGPoint(x: size.width / 2, y: size.height / 2)
@@ -53,13 +56,27 @@ struct MapOverviewView: View {
                 )
             }
 
-            var mapPointPath = Path()
-            for point in mapPoints {
-                let center = project(point)
-                let rect = CGRect(x: center.x - 1.2, y: center.y - 1.2, width: 2.4, height: 2.4)
-                mapPointPath.addEllipse(in: rect)
+            let minimumHeight = map.bounds.minimum.y
+            let heightSpan = max(map.bounds.maximum.y - minimumHeight, Float.ulpOfOne)
+            var heightPaths = Array(repeating: Path(), count: 4)
+            for point in map.points {
+                let center = project(SIMD2(point.position.x, point.position.z))
+                let normalizedHeight = (point.position.y - minimumHeight) / heightSpan
+                let band = min(3, max(0, Int(normalizedHeight * 4)))
+                let diameter = 1.8 + CGFloat(band) * 0.18
+                heightPaths[band].addEllipse(
+                    in: CGRect(
+                        x: center.x - diameter / 2,
+                        y: center.y - diameter / 2,
+                        width: diameter,
+                        height: diameter
+                    )
+                )
             }
-            context.fill(mapPointPath, with: .color(accentColor.opacity(0.46)))
+            for band in heightPaths.indices {
+                let opacity = 0.24 + Double(band) * 0.10
+                context.fill(heightPaths[band], with: .color(.white.opacity(opacity)))
+            }
 
             if trail.count > 1 {
                 var path = Path()

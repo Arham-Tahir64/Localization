@@ -81,7 +81,7 @@ struct ExperienceScreen: View {
 
                 HStack(spacing: 10) {
                     MapOverviewView(
-                        mapPoints: controller.mapPoints,
+                        map: controller.mapRenderSnapshot,
                         trail: controller.trail,
                         pose: controller.pose,
                         accentColor: experienceColor
@@ -89,10 +89,14 @@ struct ExperienceScreen: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 116)
                     .overlay(alignment: .topLeading) {
-                        Text("LIVE MAP")
-                            .font(.caption2.bold())
-                            .tracking(0.7)
-                            .foregroundStyle(.white.opacity(0.56))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mapPanelTitle)
+                                .font(.caption2.bold())
+                                .tracking(0.7)
+                            Text(mapPanelCount)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        }
+                        .foregroundStyle(.white.opacity(0.56))
                             .padding(12)
                     }
 
@@ -177,8 +181,10 @@ struct ExperienceScreen: View {
 
             SpatialStatusCapsule(
                 title: statusTitle,
-                detail: controller.trackingDescription,
-                featureCount: controller.featurePointSnapshot.observedCount,
+                detail: "\(controller.trackingDescription) • \(controller.captureDescription)",
+                featureCount: controller.featurePointSnapshot.displayedCount,
+                visibleFeatureCount: controller.featurePointSnapshot.visibleCount,
+                sourceFeatureCount: controller.featurePointSnapshot.observedCount,
                 matchCount: controller.featurePointSnapshot.mapIdentityMatchCount,
                 color: experienceColor
             )
@@ -214,6 +220,24 @@ struct ExperienceScreen: View {
         case .mapping:
             return .cyan
         }
+    }
+
+    private var mapPanelTitle: String {
+        switch mode {
+        case .mapping:
+            return "LIVE LANDMARK MAP"
+        case .relocalization:
+            return "SAVED LANDMARK MAP"
+        }
+    }
+
+    private var mapPanelCount: String {
+        let sourceCount = controller.mapRenderSnapshot.sourceCount
+        guard sourceCount > 0 else { return "WAITING FOR LANDMARKS" }
+        let renderedCount = controller.mapRenderSnapshot.points.count
+        return renderedCount == sourceCount
+            ? "\(sourceCount.formatted()) LANDMARKS"
+            : "\(renderedCount.formatted()) OF \(sourceCount.formatted()) SHOWN"
     }
 
     private var isScanReticleActive: Bool {
@@ -253,7 +277,7 @@ struct ExperienceScreen: View {
                 : "Move slowly across corners, door frames, walls, and fixed objects."
         case .relocalization:
             if controller.phase == .tracking {
-                return "Green points support a pose locked to saved-map coordinates."
+                return "Green points are restored saved-map landmark IDs after pose lock."
             }
             return "White points are live features; exact saved-ID overlaps turn green."
         }
@@ -402,7 +426,7 @@ private struct SaveMapSheet: View {
             Form {
                 TextField("Map name", text: $name)
                     .textInputAutocapitalization(.words)
-                Text("Only ARKit's persistent map, compact metadata, and one guide image are stored.")
+                Text("The ARKit world map, exact 3D landmark snapshot, metadata, and one guide image are stored locally.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

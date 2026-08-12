@@ -83,9 +83,13 @@ final class MapLibrary: ObservableObject {
 
     func save(
         worldMap: ARWorldMap,
+        spatialMap: SpatialMapSnapshot,
         metadata: MapMetadata,
         previewData: Data?
     ) async throws -> MapPackage {
+        guard spatialMap.mapID == metadata.id else {
+            throw SpatialMapSnapshotError.mapIdentifierMismatch
+        }
         let mapsDirectory = mapsDirectory
         let encodedMetadata = try encoder.encode(metadata)
 
@@ -124,6 +128,10 @@ final class MapLibrary: ObservableObject {
                 )
                 try encodedMetadata.write(
                     to: stagingDirectory.appendingPathComponent("metadata.json"),
+                    options: [.atomic]
+                )
+                try SpatialMapSnapshotCodec.encode(spatialMap).write(
+                    to: stagingDirectory.appendingPathComponent("spatial-map.plist"),
                     options: [.atomic]
                 )
                 if let previewData {
@@ -236,6 +244,42 @@ final class MapLibrary: ObservableObject {
         }.value
     }
 
+    func loadSpatialMap(from package: MapPackage) async throws -> SpatialMapSnapshot {
+        let mapsDirectory = mapsDirectory
+        return try await Task.detached(priority: .userInitiated) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let spatialMapURL = directory.appendingPathComponent("spatial-map.plist")
+            let snapshot: SpatialMapSnapshot
+            if FileManager.default.fileExists(atPath: spatialMapURL.path) {
+                let data = try Data(contentsOf: spatialMapURL, options: [.mappedIfSafe])
+                snapshot = try SpatialMapSnapshotCodec.decode(data, expectedMapID: package.id)
+            } else {
+                // Schema-v1 compatibility: derive the app-owned snapshot from the same
+                // ARWorldMap data that older packages already persisted losslessly.
+                let worldMapURL = directory.appendingPathComponent("worldmap.arexperience")
+                let data = try Data(contentsOf: worldMapURL, options: [.mappedIfSafe])
+                guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(
+                    ofClass: ARWorldMap.self,
+                    from: data
+                ) else {
+                    throw MapLibraryError.invalidWorldMap
+                }
+                snapshot = try SpatialMapSnapshot(
+                    mapID: package.id,
+                    points: worldMap.rawFeaturePoints.points,
+                    identifiers: worldMap.rawFeaturePoints.identifiers
+                )
+            }
+            guard snapshot.landmarks.count == package.metadata.featurePointCount else {
+                throw MapLibraryError.spatialMapFeatureCountMismatch(
+                    expected: package.metadata.featurePointCount,
+                    actual: snapshot.landmarks.count
+                )
+            }
+            return snapshot
+        }.value
+    }
+
     private func loadPackageSizes(for packages: [MapPackage]) {
         sizeLoadingTask?.cancel()
         let generation = UUID()
@@ -315,6 +359,7 @@ enum MapLibraryError: LocalizedError {
     case packageIdentifierMismatch
     case packageNotFound
     case packageAlreadyExists
+    case spatialMapFeatureCountMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
         switch self {
@@ -330,6 +375,8 @@ enum MapLibraryError: LocalizedError {
             return "The selected map is no longer available."
         case .packageAlreadyExists:
             return "A map package with this identifier already exists."
+        case .spatialMapFeatureCountMismatch(let expected, let actual):
+            return "The saved map metadata reports \(expected) landmarks, but its spatial payload contains \(actual)."
         }
     }
 }
