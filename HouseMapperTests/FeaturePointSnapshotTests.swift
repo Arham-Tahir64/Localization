@@ -104,6 +104,31 @@ final class FeaturePointSnapshotTests: XCTestCase {
         )
     }
 
+    func testNativeLocalizationSupportRequiresLocalizedStateAndSavedIdentity() {
+        let points = [SIMD3<Float>(1, 2, 3), SIMD3<Float>(4, 5, 6)]
+        let identifiers: [UInt64] = [7, 8]
+
+        XCTAssertTrue(
+            FeaturePointPresentation.nativeLocalizationSupportPoints(
+                points: points,
+                identifiers: identifiers,
+                savedIdentifiers: [7],
+                isLocalized: false
+            ).isEmpty
+        )
+
+        let support = FeaturePointPresentation.nativeLocalizationSupportPoints(
+            points: points,
+            identifiers: identifiers,
+            savedIdentifiers: [7],
+            isLocalized: true
+        )
+        XCTAssertEqual(
+            support,
+            [SpatialMapRenderPoint(id: 7, position: SIMD3(1, 2, 3))]
+        )
+    }
+
     func testSamplingIsBoundedUniqueAndDeterministic() {
         let first = FeaturePointPresentation.sampledIndices(count: 2_000, maximumCount: 240)
         let second = FeaturePointPresentation.sampledIndices(count: 2_000, maximumCount: 240)

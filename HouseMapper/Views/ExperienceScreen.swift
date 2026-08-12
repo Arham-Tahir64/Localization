@@ -24,99 +24,14 @@ struct ExperienceScreen: View {
 
     var body: some View {
         ZStack {
-            ARSceneView(controller: controller)
-                .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
-            SpatialFeatureOverlay(snapshot: controller.featurePointSnapshot)
-                .ignoresSafeArea()
-
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0.72), location: 0),
-                    .init(color: .clear, location: 0.25),
-                    .init(color: .clear, location: 0.62),
-                    .init(color: .black.opacity(0.82), location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-
-            VStack(spacing: 10) {
-                cameraHeader
-
-                if case .mapping = mode {
-                    ProgressView(value: controller.mappingProgress)
-                        .tint(experienceColor)
-                        .scaleEffect(y: 0.55)
-                        .padding(.horizontal, 52)
-                        .accessibilityLabel("Mapping progress")
-                }
-
-                if case .relocalization(let package) = mode,
-                   controller.phase != .tracking {
-                    HStack {
-                        Spacer()
-                        RelocalizationReferenceThumbnail(package: package)
-                    }
-                }
-
-                Spacer()
-
-                VStack(spacing: 12) {
-                    SpatialScanReticle(
-                        color: experienceColor,
-                        isActive: isScanReticleActive
-                    )
-
-                    SpatialGuidancePrompt(
-                        title: guidanceTitle,
-                        detail: guidanceDetail,
-                        color: experienceColor
-                    )
-                }
-
-                Spacer()
-
-                HStack(spacing: 10) {
-                    MapOverviewView(
-                        map: controller.mapRenderSnapshot,
-                        mesh: controller.meshRenderSnapshot,
-                        trail: controller.trail,
-                        pose: controller.pose,
-                        accentColor: experienceColor
-                    )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 116)
-                    .overlay(alignment: .topLeading) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(mapPanelTitle)
-                                .font(.caption2.bold())
-                                .tracking(0.7)
-                            Text(mapPanelCount)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        }
-                        .foregroundStyle(.white.opacity(0.56))
-                            .padding(12)
-                    }
-
-                    PoseInstrumentView(
-                        pose: controller.pose,
-                        accentColor: experienceColor
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-
-                controls
+            GeometryReader { proxy in
+                spatialConsole(size: proxy.size)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
 
-            if controller.phase == .tracking {
-                LocalizationSuccessPulse()
-                    .transition(.opacity)
-            }
         }
         .preferredColorScheme(.dark)
         .onAppear { beginValidationAttemptIfNeeded() }
@@ -166,16 +81,126 @@ struct ExperienceScreen: View {
         }
     }
 
+    private func spatialConsole(size: CGSize) -> some View {
+        VStack(spacing: 4) {
+            cameraHeader
+
+            if case .mapping = mode {
+                ProgressView(value: controller.mappingProgress)
+                    .tint(experienceColor)
+                    .scaleEffect(y: 0.42)
+                    .accessibilityLabel("Mapping progress")
+            }
+
+            HStack(spacing: 4) {
+                SpatialPointCloudView(
+                    map: controller.mapRenderSnapshot,
+                    trail: controller.trail,
+                    pose: controller.pose,
+                    localizationSupportPoints: controller.phase == .tracking
+                        ? controller.localizationSupportPoints
+                        : [],
+                    accentColor: experienceColor
+                )
+                .overlay(alignment: .topLeading) {
+                    consolePanelLabel(
+                        mapPanelTitle,
+                        detail: mapPanelCount
+                    )
+                }
+                .frame(width: max(190, size.width * 0.64))
+
+                VStack(spacing: 4) {
+                    cameraPanel
+                        .frame(maxHeight: .infinity)
+
+                    MapOverviewView(
+                        map: controller.mapRenderSnapshot,
+                        mesh: controller.meshRenderSnapshot,
+                        trail: controller.trail,
+                        pose: controller.pose,
+                        accentColor: experienceColor
+                    )
+                    .overlay(alignment: .topLeading) {
+                        consolePanelLabel("ROUTE", detail: trajectoryDetail)
+                    }
+                    .frame(maxHeight: .infinity)
+
+                    HStack(spacing: 4) {
+                        AttitudeInstrumentView(
+                            pitch: controller.pose?.eulerAngles.x,
+                            roll: controller.pose?.eulerAngles.z,
+                            accentColor: experienceColor
+                        )
+                        MapHeadingInstrumentView(
+                            yaw: controller.pose?.eulerAngles.y,
+                            accentColor: experienceColor
+                        )
+                    }
+                    .frame(maxHeight: .infinity)
+
+                    compactControl
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    private var cameraPanel: some View {
+        ZStack {
+            ARSceneView(controller: controller)
+            SpatialFeatureOverlay(snapshot: controller.featurePointSnapshot)
+        }
+        .clipped()
+        .overlay(alignment: .topLeading) {
+            consolePanelLabel("LIVE VIDEO", detail: featureDetail)
+        }
+        .overlay {
+            Rectangle().stroke(.white.opacity(0.14), lineWidth: 0.75)
+        }
+        .accessibilityLabel("Live camera with tracked feature points")
+    }
+
+    private func consolePanelLabel(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .tracking(0.55)
+            Text(detail)
+                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white.opacity(0.72))
+        .padding(6)
+        .shadow(color: .black, radius: 2)
+        .allowsHitTesting(false)
+    }
+
+    private var featureDetail: String {
+        let snapshot = controller.featurePointSnapshot
+        if snapshot.serverVerifiedInlierCount > 0 {
+            return "\(snapshot.serverVerifiedInlierCount) PNP INLIERS"
+        }
+        if snapshot.mapIdentityMatchCount > 0 {
+            return "\(snapshot.mapIdentityMatchCount) RESTORED IDS"
+        }
+        return "\(snapshot.displayedCount)/\(snapshot.observedCount) FEATURES"
+    }
+
+    private var trajectoryDetail: String {
+        guard let pose = controller.pose else { return "POSE WITHHELD" }
+        return String(format: "X %+.1f  Z %+.1f M", pose.position.x, pose.position.z)
+    }
+
     private var cameraHeader: some View {
         HStack(spacing: 10) {
             Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.subheadline.bold())
-                    .frame(width: 42, height: 42)
-                    .background(.black.opacity(0.58), in: Circle())
-                    .background(.ultraThinMaterial, in: Circle())
+                    .font(.caption.bold())
+                    .frame(width: 36, height: 42)
+                    .background(.black.opacity(0.92))
                     .overlay {
-                        Circle().stroke(.white.opacity(0.12), lineWidth: 1)
+                        Rectangle().stroke(.white.opacity(0.14), lineWidth: 0.75)
                     }
             }
             .accessibilityLabel("Close spatial session")
@@ -255,68 +280,22 @@ struct ExperienceScreen: View {
             : "\(landmarkText) • \(controller.mappingKeyframeCount) KF"
     }
 
-    private var isScanReticleActive: Bool {
-        switch controller.phase {
-        case .tracking, .failed, .unsupported:
-            return false
-        default:
-            return true
-        }
-    }
-
-    private var guidanceTitle: String {
-        switch mode {
-        case .mapping:
-            return controller.mappingDescription == "Mapped"
-                ? "Map coverage is ready"
-                : "Scan architectural detail"
-        case .relocalization:
-            switch controller.phase {
-            case .tracking: return "Localized in saved map"
-            case .failed: return "Move to a distinctive mapped area"
-            case .limited: return "Hold steady and find more texture"
-            case .loading: return "Preparing saved spatial map"
-            default: return "Matching this view to your map"
-            }
-        }
-    }
-
-    private var guidanceDetail: String {
-        if let message = controller.statusMessage, controller.phase != .tracking {
-            return message
-        }
-        switch mode {
-        case .mapping:
-            return controller.mappingDescription == "Mapped"
-                ? "Save now, or continue walking to extend into another room."
-                : "Move slowly across corners, door frames, walls, and fixed objects."
-        case .relocalization:
-            if controller.phase == .tracking {
-                return controller.featurePointSnapshot.serverVerifiedInlierCount > 0
-                    ? "Green points are verified server PnP inliers; pose is tracked in the saved map frame."
-                    : "Green points are restored saved-map landmark IDs after native ARKit pose lock."
-            }
-            return "White points are live ARKit features; verified server PnP inliers turn green."
-        }
-    }
-
     @ViewBuilder
-    private var controls: some View {
+    private var compactControl: some View {
         switch mode {
         case .mapping:
             Button {
                 showingSaveDialog = true
             } label: {
                 Label(
-                    controller.isSaving ? "Saving…" : "Save Map",
+                    controller.isSaving ? "SAVING" : "SAVE MAP",
                     systemImage: "square.and.arrow.down"
                 )
-                .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .frame(maxWidth: .infinity, minHeight: 34)
             }
             .buttonStyle(.borderedProminent)
             .tint(.cyan)
-            .clipShape(Capsule())
             .disabled(!controller.canSave || controller.isSaving)
 
         case .relocalization:
@@ -325,31 +304,35 @@ struct ExperienceScreen: View {
                     beginValidationAttemptIfNeeded(forceNewAttempt: true)
                     controller.retryRelocalization()
                 } label: {
-                    Label("Retry Saved Map", systemImage: "arrow.clockwise")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 50)
+                    Label("RETRY", systemImage: "arrow.clockwise")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .frame(maxWidth: .infinity, minHeight: 34)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
-                .clipShape(Capsule())
             } else if controller.phase == .tracking {
-                Label("Pose locked in saved map", systemImage: "location.fill")
-                    .font(.subheadline.bold())
+                Label("POSE LOCKED", systemImage: "location.fill")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(.green)
-                    .frame(maxWidth: .infinity, minHeight: 46)
-                    .background(.green.opacity(0.12), in: Capsule())
+                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .background(.green.opacity(0.10))
                     .overlay {
-                        Capsule().stroke(.green.opacity(0.28), lineWidth: 1)
+                        Rectangle().stroke(.green.opacity(0.42), lineWidth: 0.75)
                     }
             } else {
                 HStack(spacing: 7) {
                     ProgressView()
+                        .controlSize(.mini)
                         .tint(experienceColor)
-                    Text("\(Int(controller.elapsedRelocalization)) s · \(controller.confidence.rawValue) confidence")
-                        .font(.caption.monospacedDigit())
+                    Text("SEARCH \(Int(controller.elapsedRelocalization))S")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
                 }
                 .foregroundStyle(.white.opacity(0.72))
-                .frame(maxWidth: .infinity, minHeight: 40)
+                .frame(maxWidth: .infinity, minHeight: 34)
+                .background(.white.opacity(0.04))
+                .overlay {
+                    Rectangle().stroke(.white.opacity(0.14), lineWidth: 0.75)
+                }
             }
         }
     }
@@ -402,37 +385,6 @@ struct ExperienceScreen: View {
         validationAttemptRecorded = true
     }
 }
-private struct RelocalizationReferenceThumbnail: View {
-    let package: MapPackage
-
-    var body: some View {
-        HStack(spacing: 9) {
-            if let image = UIImage(contentsOfFile: package.previewURL.path) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 58, height: 48)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("REFERENCE")
-                    .font(.caption2.bold())
-                    .tracking(0.7)
-                Text(package.metadata.name)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.64))
-                    .lineLimit(1)
-            }
-        }
-        .padding(7)
-        .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(.white.opacity(0.12), lineWidth: 1)
-        }
-    }
-}
-
 private struct SaveMapSheet: View {
     @Binding var name: String
     let isSaving: Bool

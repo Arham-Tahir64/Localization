@@ -173,12 +173,11 @@ struct SpatialStatusCapsule: View {
                     )
             }
         }
-        .padding(.horizontal, 13)
-        .frame(height: 50)
-        .background(.black.opacity(0.58), in: Capsule())
-        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 11)
+        .frame(height: 42)
+        .background(.black.opacity(0.92))
         .overlay {
-            Capsule().stroke(.white.opacity(0.12), lineWidth: 1)
+            Rectangle().stroke(.white.opacity(0.14), lineWidth: 0.75)
         }
         .animation(.easeInOut(duration: 0.25), value: title)
         .animation(.easeInOut(duration: 0.25), value: color)

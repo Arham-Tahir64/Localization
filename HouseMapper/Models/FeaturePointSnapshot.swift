@@ -390,6 +390,21 @@ struct FeaturePointSnapshot: Equatable, Sendable {
 }
 
 enum FeaturePointPresentation {
+    static func nativeLocalizationSupportPoints(
+        points: [SIMD3<Float>],
+        identifiers: [UInt64],
+        savedIdentifiers: Set<UInt64>,
+        isLocalized: Bool
+    ) -> [SpatialMapRenderPoint] {
+        guard isLocalized, !savedIdentifiers.isEmpty else { return [] }
+        let sourceCount = min(points.count, identifiers.count)
+        return (0..<sourceCount).compactMap { index in
+            let identifier = identifiers[index]
+            guard savedIdentifiers.contains(identifier) else { return nil }
+            return SpatialMapRenderPoint(id: identifier, position: points[index])
+        }
+    }
+
     static func role(
         for identifier: UInt64,
         savedIdentifiers: Set<UInt64>,

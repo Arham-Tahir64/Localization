@@ -21,6 +21,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var meshDescription = "Checking support"
     @Published private(set) var pose: CameraPose?
     @Published private(set) var mapRenderSnapshot = SpatialMapRenderSnapshot.empty
+    @Published private(set) var localizationSupportPoints: [SpatialMapRenderPoint] = []
     @Published private(set) var meshRenderSnapshot = SpatialMeshRenderSnapshot.empty
     @Published private(set) var trail: [SIMD2<Float>] = []
     @Published private(set) var elapsedRelocalization: TimeInterval = 0
@@ -89,7 +90,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static let coveragePublicationInterval: TimeInterval = 0.5
     private static let meshUpdateInterval: TimeInterval = 0.2
     private static let timeoutFallbackGrace: TimeInterval = 0.25
-    private static let maximumMapRenderPointCount = 4_000
+    private static let maximumMapRenderPointCount = 12_000
     private static let maximumMapRenderTriangleCount = 1_500
     private static let maximumScreenFeaturePointCount = 240
     private static let maximumPriorityFeaturePointCount = 120
@@ -327,6 +328,7 @@ final class ARSessionController: NSObject, ObservableObject {
         serverSessionID = UUID()
         serverMapFromWorld = nil
         serverVerifiedLandmarks = []
+        localizationSupportPoints = []
         serverQueryInFlight = false
         serverRelocalizationActive = false
         nextServerFrameID = 0
@@ -393,6 +395,7 @@ final class ARSessionController: NSObject, ObservableObject {
         serverPoseGate.reset()
         serverMapFromWorld = nil
         serverVerifiedLandmarks = []
+        localizationSupportPoints = []
         serverQueryInFlight = false
         nextServerFrameID = 0
         lastServerQueryTimestamp = -.infinity
@@ -719,7 +722,10 @@ final class ARSessionController: NSObject, ObservableObject {
                     quality: response.result.quality,
                     rejectionStage: "clientPolicy"
                 )
-                if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
+                if serverMapFromWorld == nil {
+                    serverVerifiedLandmarks = []
+                    localizationSupportPoints = []
+                }
                 serverLocalizationDescription = "Weak server match rejected"
                 if serverMapFromWorld == nil {
                     statusMessage = "The connected map match was below the verified PnP confidence threshold."
@@ -739,6 +745,16 @@ final class ARSessionController: NSObject, ObservableObject {
                 )
                 serverMapFromWorld = bridge
                 serverVerifiedLandmarks = response.inliers
+                localizationSupportPoints = response.inliers.map {
+                    SpatialMapRenderPoint(
+                        id: $0.mapLandmarkID,
+                        position: SIMD3(
+                            $0.mapPosition.x,
+                            $0.mapPosition.y,
+                            $0.mapPosition.z
+                        )
+                    )
+                }
                 phase = .tracking
                 confidence = .high
                 statusMessage = "Localized with \(response.inliers.count) verified PnP inliers."
@@ -768,7 +784,10 @@ final class ARSessionController: NSObject, ObservableObject {
                 quality: response.result.quality,
                 rejectionStage: "clientContract"
             )
-            if serverMapFromWorld == nil { serverVerifiedLandmarks = [] }
+            if serverMapFromWorld == nil {
+                serverVerifiedLandmarks = []
+                localizationSupportPoints = []
+            }
             serverLocalizationDescription = "Server result rejected"
             if serverMapFromWorld == nil { statusMessage = error.localizedDescription }
         }
@@ -824,6 +843,7 @@ final class ARSessionController: NSObject, ObservableObject {
             serverRelocalizationActive = false
             serverPoseGate.reset()
             serverVerifiedLandmarks = []
+            localizationSupportPoints = []
             serverMapFromWorld = nil
             serverLocalizationDescription = "Connected localization timed out"
             phase = .failed
@@ -957,11 +977,24 @@ final class ARSessionController: NSObject, ObservableObject {
         let identityMatchCount = overlayState == .localized && !usesServerPose
             ? visibleCandidates.lazy.filter { self.savedFeatureIdentifiers.contains($0.id) }.count
             : 0
-        let serverPoints = projectServerVerifiedLandmarks(
-            frame: frame,
-            orientation: orientation,
-            viewportSize: viewportSize
-        )
+        if !usesServerPose {
+            let matchedPoints = FeaturePointPresentation.nativeLocalizationSupportPoints(
+                points: points,
+                identifiers: identifiers,
+                savedIdentifiers: savedFeatureIdentifiers,
+                isLocalized: overlayState == .localized
+            )
+            if matchedPoints != localizationSupportPoints {
+                localizationSupportPoints = matchedPoints
+            }
+        }
+        let serverPoints = overlayState == .localized
+            ? projectServerVerifiedLandmarks(
+                frame: frame,
+                orientation: orientation,
+                viewportSize: viewportSize
+            )
+            : []
 
         let snapshot = FeaturePointSnapshot(
             points: projectedPoints + serverPoints,
