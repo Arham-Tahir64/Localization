@@ -208,6 +208,9 @@ private struct MapRow: View {
                     .frame(width: 36, height: 44)
             } else {
                 Menu {
+                    ShareLink(item: package.directoryURL) {
+                        Label("Share Calibrated Map Package", systemImage: "shippingbox.and.arrow.backward")
+                    }
                     if FileManager.default.fileExists(atPath: package.benchmarkURL.path) {
                         ShareLink(item: package.benchmarkURL) {
                             Label("Share Device Benchmark", systemImage: "square.and.arrow.up")

@@ -125,9 +125,61 @@ struct MapBenchmarkMetrics: Codable, Hashable, Sendable {
     let meshAnchorCount: Int
     let meshVertexCount: Int
     let meshTriangleCount: Int
+    let keyframeCount: Int
     let spatialMapByteCount: Int?
     let packageByteCount: Int64?
     let ioDuration: TimeInterval?
+
+    private enum CodingKeys: String, CodingKey {
+        case mapID
+        case mapName
+        case landmarkCount
+        case meshAnchorCount
+        case meshVertexCount
+        case meshTriangleCount
+        case keyframeCount
+        case spatialMapByteCount
+        case packageByteCount
+        case ioDuration
+    }
+
+    init(
+        mapID: UUID,
+        mapName: String,
+        landmarkCount: Int,
+        meshAnchorCount: Int,
+        meshVertexCount: Int,
+        meshTriangleCount: Int,
+        keyframeCount: Int,
+        spatialMapByteCount: Int?,
+        packageByteCount: Int64?,
+        ioDuration: TimeInterval?
+    ) {
+        self.mapID = mapID
+        self.mapName = mapName
+        self.landmarkCount = landmarkCount
+        self.meshAnchorCount = meshAnchorCount
+        self.meshVertexCount = meshVertexCount
+        self.meshTriangleCount = meshTriangleCount
+        self.keyframeCount = keyframeCount
+        self.spatialMapByteCount = spatialMapByteCount
+        self.packageByteCount = packageByteCount
+        self.ioDuration = ioDuration
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mapID = try container.decode(UUID.self, forKey: .mapID)
+        mapName = try container.decode(String.self, forKey: .mapName)
+        landmarkCount = try container.decode(Int.self, forKey: .landmarkCount)
+        meshAnchorCount = try container.decode(Int.self, forKey: .meshAnchorCount)
+        meshVertexCount = try container.decode(Int.self, forKey: .meshVertexCount)
+        meshTriangleCount = try container.decode(Int.self, forKey: .meshTriangleCount)
+        keyframeCount = try container.decodeIfPresent(Int.self, forKey: .keyframeCount) ?? 0
+        spatialMapByteCount = try container.decodeIfPresent(Int.self, forKey: .spatialMapByteCount)
+        packageByteCount = try container.decodeIfPresent(Int64.self, forKey: .packageByteCount)
+        ioDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .ioDuration)
+    }
 }
 
 struct SessionBenchmarkReport: Codable, Hashable, Identifiable, Sendable {

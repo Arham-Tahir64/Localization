@@ -72,6 +72,7 @@ final class ValidationRecordTests: XCTestCase {
                 meshAnchorCount: 8,
                 meshVertexCount: 20_000,
                 meshTriangleCount: 35_000,
+                keyframeCount: 42,
                 spatialMapByteCount: 4_000_000,
                 packageByteCount: 6_000_000,
                 ioDuration: 0.8
@@ -91,6 +92,7 @@ final class ValidationRecordTests: XCTestCase {
         XCTAssertEqual(decoded, report)
         XCTAssertEqual(decoded.depth?.highConfidenceFraction, 0.72)
         XCTAssertEqual(decoded.map?.meshTriangleCount, 35_000)
+        XCTAssertEqual(decoded.map?.keyframeCount, 42)
     }
 
     func testZeroFeatureSamplesReduceMeanInsteadOfBeingDropped() {
@@ -130,6 +132,28 @@ final class ValidationRecordTests: XCTestCase {
         XCTAssertEqual(report.features?.sampleCount, 2)
         XCTAssertEqual(report.features?.meanObservedCount, 500)
         XCTAssertEqual(report.features?.meanVisibleCount, 200)
+    }
+
+    func testLegacyMapBenchmarkWithoutKeyframeCountDecodesAsZero() throws {
+        let mapID = uuid(99)
+        let json = """
+        {
+          "mapID": "\(mapID.uuidString)",
+          "mapName": "Legacy",
+          "landmarkCount": 100,
+          "meshAnchorCount": 2,
+          "meshVertexCount": 300,
+          "meshTriangleCount": 500
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(
+            MapBenchmarkMetrics.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertEqual(decoded.keyframeCount, 0)
+        XCTAssertEqual(decoded.mapID, mapID)
     }
 
     func testRetentionKeepsNewestRecordsInDescendingOrder() {

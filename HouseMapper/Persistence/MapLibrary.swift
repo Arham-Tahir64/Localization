@@ -85,13 +85,18 @@ final class MapLibrary: ObservableObject {
         worldMap: ARWorldMap,
         spatialMap: SpatialMapSnapshot,
         metadata: MapMetadata,
-        previewData: Data?
+        previewData: Data?,
+        keyframeCaptures: [PendingMappingKeyframe] = []
     ) async throws -> MapPackage {
         guard spatialMap.mapID == metadata.id else {
             throw SpatialMapSnapshotError.mapIdentifierMismatch
         }
         let mapsDirectory = mapsDirectory
         let encodedMetadata = try encoder.encode(metadata)
+        let keyframeManifest = try MappingKeyframeManifest(
+            mapID: metadata.id,
+            captures: keyframeCaptures
+        )
 
         let package = try await Task.detached(priority: .userInitiated) {
             let fileManager = FileManager.default
@@ -138,6 +143,28 @@ final class MapLibrary: ObservableObject {
                     try previewData.write(
                         to: stagingDirectory.appendingPathComponent("preview.jpg"),
                         options: [.atomic]
+                    )
+                }
+                if !keyframeCaptures.isEmpty {
+                    let keyframesDirectory = stagingDirectory.appendingPathComponent(
+                        "keyframes",
+                        isDirectory: true
+                    )
+                    try fileManager.createDirectory(
+                        at: keyframesDirectory,
+                        withIntermediateDirectories: true
+                    )
+                    for capture in keyframeCaptures {
+                        try capture.imageData.write(
+                            to: keyframesDirectory.appendingPathComponent(
+                                "\(capture.id.uuidString).jpg"
+                            ),
+                            options: .atomic
+                        )
+                    }
+                    try keyframeManifest.encodedJSON().write(
+                        to: keyframesDirectory.appendingPathComponent("manifest.json"),
+                        options: .atomic
                     )
                 }
 
@@ -315,6 +342,39 @@ final class MapLibrary: ObservableObject {
         }.value
     }
 
+    func loadKeyframeManifest(for package: MapPackage) async throws -> MappingKeyframeManifest? {
+        let mapsDirectory = mapsDirectory
+        return try await Task.detached(priority: .utility) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let keyframesDirectory = directory.appendingPathComponent("keyframes", isDirectory: true)
+            let manifestURL = keyframesDirectory.appendingPathComponent("manifest.json")
+            guard FileManager.default.fileExists(atPath: manifestURL.path) else { return nil }
+            let data = try Data(contentsOf: manifestURL, options: [.mappedIfSafe])
+            let manifest = try MappingKeyframeManifest.decode(data, expectedMapID: package.id)
+            let expectedNames = Set(manifest.keyframes.map(\.imageFileName))
+            let actualImageURLs = try FileManager.default.contentsOfDirectory(
+                at: keyframesDirectory,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ).filter { $0.pathExtension.lowercased() == "jpg" }
+            let actualNames = Set(actualImageURLs.map(\.lastPathComponent))
+            guard expectedNames == actualNames else {
+                throw MapLibraryError.invalidKeyframePackage
+            }
+            for imageURL in actualImageURLs {
+                let values = try imageURL.resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey, .isSymbolicLinkKey]
+                )
+                guard values.isRegularFile == true,
+                      values.isSymbolicLink != true,
+                      (values.fileSize ?? 0) > 0 else {
+                    throw MapLibraryError.invalidKeyframePackage
+                }
+            }
+            return manifest
+        }.value
+    }
+
     func benchmarkStorageMetrics(for package: MapPackage) async throws -> (
         spatialMapByteCount: Int?,
         packageByteCount: Int64
@@ -408,6 +468,7 @@ enum MapLibraryError: LocalizedError {
     case packageNotFound
     case packageAlreadyExists
     case invalidBenchmark
+    case invalidKeyframePackage
     case spatialMapFeatureCountMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
@@ -426,6 +487,8 @@ enum MapLibraryError: LocalizedError {
             return "A map package with this identifier already exists."
         case .invalidBenchmark:
             return "The saved device benchmark does not match this map package."
+        case .invalidKeyframePackage:
+            return "The saved calibrated keyframe package is incomplete or invalid."
         case .spatialMapFeatureCountMismatch(let expected, let actual):
             return "The saved map metadata reports \(expected) landmarks, but its spatial payload contains \(actual)."
         }

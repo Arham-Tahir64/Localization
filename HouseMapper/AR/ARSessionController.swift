@@ -1,5 +1,6 @@
 import ARKit
 import Combine
+import CoreImage
 import SceneKit
 import SwiftUI
 import UIKit
@@ -28,6 +29,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var savedPackage: MapPackage?
     @Published private(set) var canSave = false
     @Published private(set) var benchmarkReport: SessionBenchmarkReport?
+    @Published private(set) var mappingKeyframeCount = 0
 
     let mode: ExperienceMode
 
@@ -54,6 +56,11 @@ final class ARSessionController: NSObject, ObservableObject {
     private var captureDiagnostics = CaptureDiagnosticsAccumulator()
     private var benchmarkAccumulator = SessionBenchmarkAccumulator(startedAt: Date())
     private var benchmarkMapMetrics: MapBenchmarkMetrics?
+    private var mappingKeyframeSelector = MappingKeyframeSelector()
+    private var mappingKeyframes: [PendingMappingKeyframe] = []
+    private var nextMappingFrameID: UInt64 = 0
+    private var keyframeEncodingInFlight = false
+    private let keyframeCIContext = CIContext(options: [.cacheIntermediates: false])
     private var savedFeatureIdentifiers: Set<UInt64> = []
     private var lastMeshUpdateByAnchor: [UUID: TimeInterval] = [:]
     private lazy var meshVisualizationMaterial: SCNMaterial = {
@@ -74,6 +81,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static let maximumMapRenderTriangleCount = 1_500
     private static let maximumScreenFeaturePointCount = 240
     private static let maximumPriorityFeaturePointCount = 120
+    private static let keyframeWidth = 1_280
 
     init(mode: ExperienceMode, mapLibrary: MapLibrary) {
         self.mode = mode
@@ -132,10 +140,12 @@ final class ARSessionController: NSObject, ObservableObject {
                     let loadStart = ProcessInfo.processInfo.systemUptime
                     let worldMap = try await mapLibrary.loadWorldMap(from: package)
                     let spatialMap = try await mapLibrary.loadSpatialMap(from: package)
+                    let keyframeManifest = try await mapLibrary.loadKeyframeManifest(for: package)
                     let storage = try await mapLibrary.benchmarkStorageMetrics(for: package)
                     guard self.hasStarted else { return }
                     self.loadedWorldMap = worldMap
                     self.loadedSpatialMap = spatialMap
+                    self.mappingKeyframeCount = keyframeManifest?.keyframes.count ?? 0
                     self.savedFeatureIdentifiers = Set(spatialMap.landmarks.map(\.id))
                     self.mapRenderSnapshot = SpatialMapRenderSnapshot.make(
                         landmarks: spatialMap.landmarks,
@@ -148,6 +158,7 @@ final class ARSessionController: NSObject, ObservableObject {
                     let metrics = Self.makeMapBenchmarkMetrics(
                         package: package,
                         spatialMap: spatialMap,
+                        keyframeCount: keyframeManifest?.keyframes.count ?? 0,
                         storage: storage,
                         ioDuration: ProcessInfo.processInfo.systemUptime - loadStart
                     )
@@ -179,6 +190,10 @@ final class ARSessionController: NSObject, ObservableObject {
               canSave,
               !isSaving,
               let sceneView else { return }
+        guard !keyframeEncodingInFlight else {
+            statusMessage = "Finishing the current calibrated keyframe…"
+            return
+        }
 
         isSaving = true
         statusMessage = "Capturing persistent world map…"
@@ -243,7 +258,8 @@ final class ARSessionController: NSObject, ObservableObject {
                 worldMap: worldMap,
                 spatialMap: spatialMap,
                 metadata: metadata,
-                previewData: previewData
+                previewData: previewData,
+                keyframeCaptures: mappingKeyframes
             )
             mapRenderSnapshot = SpatialMapRenderSnapshot.make(
                 landmarks: spatialMap.landmarks,
@@ -261,6 +277,7 @@ final class ARSessionController: NSObject, ObservableObject {
                 let metrics = Self.makeMapBenchmarkMetrics(
                     package: package,
                     spatialMap: spatialMap,
+                    keyframeCount: mappingKeyframes.count,
                     storage: storage,
                     ioDuration: ProcessInfo.processInfo.systemUptime - persistenceStart
                 )
@@ -419,6 +436,7 @@ final class ARSessionController: NSObject, ObservableObject {
             if confidence != .unavailable { confidence = .unavailable }
             appendTrail(cameraPose.position)
             publishSpatialMapSnapshotIfNeeded(from: frame)
+            captureMappingKeyframeIfNeeded(from: frame)
 
         case .relocalization:
             updateRelocalizationState(
@@ -673,6 +691,7 @@ final class ARSessionController: NSObject, ObservableObject {
         if case .mapping = mode {
             let shouldAllowSave = (status == .extending || status == .mapped)
                 && trackingDescription == "Normal"
+                && !keyframeEncodingInFlight
             if canSave != shouldAllowSave { canSave = shouldAllowSave }
         }
     }
@@ -704,6 +723,115 @@ final class ARSessionController: NSObject, ObservableObject {
         if snapshot != mapRenderSnapshot {
             mapRenderSnapshot = snapshot
         }
+    }
+
+    private func captureMappingKeyframeIfNeeded(from frame: ARFrame) {
+        guard !keyframeEncodingInFlight else { return }
+        let tracking = Self.observationTrackingState(frame.camera.trackingState)
+        let featureCount = frame.rawFeaturePoints?.points.count ?? 0
+        guard mappingKeyframeSelector.reserveIfEligible(
+            timestamp: frame.timestamp,
+            mapFromCamera: frame.camera.transform,
+            tracking: tracking,
+            featureCount: featureCount
+        ) else { return }
+
+        keyframeEncodingInFlight = true
+        if canSave { canSave = false }
+        nextMappingFrameID &+= 1
+        let keyframeID = UUID()
+        let frameID = nextMappingFrameID
+        let capturedImage = frame.capturedImage
+        let capturedWidth = CVPixelBufferGetWidth(capturedImage)
+        let capturedHeight = CVPixelBufferGetHeight(capturedImage)
+        let encodedWidth = min(Self.keyframeWidth, capturedWidth)
+        let encodedHeight = max(1, Int((Double(capturedHeight) * Double(encodedWidth) / Double(capturedWidth)).rounded()))
+        let calibrationResolution = frame.camera.imageResolution
+        let scaleX = Float(encodedWidth) / Float(calibrationResolution.width)
+        let scaleY = Float(encodedHeight) / Float(calibrationResolution.height)
+        var scaledIntrinsics = frame.camera.intrinsics
+        scaledIntrinsics.columns.0.x *= scaleX
+        scaledIntrinsics.columns.1.y *= scaleY
+        scaledIntrinsics.columns.2.x *= scaleX
+        scaledIntrinsics.columns.2.y *= scaleY
+        let pendingMetadata = (
+            id: keyframeID,
+            frameID: frameID,
+            capturedAt: frame.timestamp,
+            image: EncodedImageGeometry(
+                width: encodedWidth,
+                height: encodedHeight,
+                orientation: .right,
+                camera: .rearWide
+            ),
+            intrinsics: Matrix3x3Record(scaledIntrinsics),
+            mapFromCamera: Matrix4x4Record(frame.camera.transform),
+            tracking: tracking,
+            featureCount: featureCount
+        )
+        let context = keyframeCIContext
+
+        Task.detached(priority: .utility) { [weak self] in
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            let input = CIImage(cvPixelBuffer: capturedImage)
+            let scale = CGFloat(encodedWidth) / input.extent.width
+            let resized = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let imageData = context.jpegRepresentation(
+                of: resized,
+                colorSpace: colorSpace,
+                options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.82]
+            )
+            await self?.finishMappingKeyframeEncoding(
+                metadata: pendingMetadata,
+                imageData: imageData
+            )
+        }
+    }
+
+    private func finishMappingKeyframeEncoding(
+        metadata: (
+            id: UUID,
+            frameID: UInt64,
+            capturedAt: TimeInterval,
+            image: EncodedImageGeometry,
+            intrinsics: Matrix3x3Record,
+            mapFromCamera: Matrix4x4Record,
+            tracking: ObservationTrackingState,
+            featureCount: Int
+        ),
+        imageData: Data?
+    ) {
+        keyframeEncodingInFlight = false
+        guard hasStarted, let imageData, !imageData.isEmpty else {
+            mappingKeyframeSelector.cancelMostRecentReservation()
+            refreshCanSaveAfterKeyframeEncoding()
+            return
+        }
+        mappingKeyframeSelector.commitMostRecentReservation()
+        mappingKeyframes.append(
+            PendingMappingKeyframe(
+                id: metadata.id,
+                frameID: metadata.frameID,
+                capturedAt: metadata.capturedAt,
+                image: metadata.image,
+                intrinsics: metadata.intrinsics,
+                mapFromCamera: metadata.mapFromCamera,
+                tracking: metadata.tracking,
+                sourceFeatureCount: metadata.featureCount,
+                imageData: imageData
+            )
+        )
+        mappingKeyframeCount = mappingKeyframes.count
+        refreshCanSaveAfterKeyframeEncoding()
+    }
+
+    private func refreshCanSaveAfterKeyframeEncoding() {
+        guard case .mapping = mode else { return }
+        let mappingReady = mappingDescription == "Extending" || mappingDescription == "Mapped"
+        let shouldAllowSave = mappingReady
+            && trackingDescription == "Normal"
+            && !keyframeEncodingInFlight
+        if canSave != shouldAllowSave { canSave = shouldAllowSave }
     }
 
     private func inspectDepthIfNeeded(_ depthData: ARDepthData?) {
@@ -745,6 +873,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static func makeMapBenchmarkMetrics(
         package: MapPackage,
         spatialMap: SpatialMapSnapshot,
+        keyframeCount: Int,
         storage: (spatialMapByteCount: Int?, packageByteCount: Int64),
         ioDuration: TimeInterval
     ) -> MapBenchmarkMetrics {
@@ -755,6 +884,7 @@ final class ARSessionController: NSObject, ObservableObject {
             meshAnchorCount: spatialMap.meshAnchors.count,
             meshVertexCount: spatialMap.meshAnchors.reduce(0) { $0 + $1.vertices.count },
             meshTriangleCount: spatialMap.meshAnchors.reduce(0) { $0 + $1.faces.count },
+            keyframeCount: keyframeCount,
             spatialMapByteCount: storage.spatialMapByteCount,
             packageByteCount: storage.packageByteCount,
             ioDuration: max(0, ioDuration)
@@ -777,6 +907,20 @@ final class ARSessionController: NSObject, ObservableObject {
             case .relocalizing: return .limitedRelocalizing
             @unknown default: return .limitedOther
             }
+        }
+    }
+
+    private static func observationTrackingState(
+        _ state: ARCamera.TrackingState
+    ) -> ObservationTrackingState {
+        switch trackingBenchmarkCategory(state) {
+        case .normal: return .normal
+        case .limitedInitializing: return .limitedInitializing
+        case .limitedExcessiveMotion: return .limitedExcessiveMotion
+        case .limitedInsufficientFeatures: return .limitedInsufficientFeatures
+        case .limitedRelocalizing: return .limitedRelocalizing
+        case .limitedOther: return .limitedOther
+        case .unavailable: return .unavailable
         }
     }
 

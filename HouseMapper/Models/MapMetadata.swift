@@ -375,4 +375,6 @@ struct MapPackage: Identifiable, Hashable, Sendable {
     var spatialMapURL: URL { directoryURL.appendingPathComponent("spatial-map.plist") }
     var previewURL: URL { directoryURL.appendingPathComponent("preview.jpg") }
     var benchmarkURL: URL { directoryURL.appendingPathComponent("benchmark.json") }
+    var keyframesURL: URL { directoryURL.appendingPathComponent("keyframes", isDirectory: true) }
+    var keyframeManifestURL: URL { keyframesURL.appendingPathComponent("manifest.json") }
 }

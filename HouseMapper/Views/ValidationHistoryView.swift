@@ -123,6 +123,7 @@ private struct ValidationDetailView: View {
                     if let map = benchmark.map {
                         LabeledContent("Saved landmarks", value: map.landmarkCount.formatted())
                         LabeledContent("Saved mesh triangles", value: map.meshTriangleCount.formatted())
+                        LabeledContent("Calibrated keyframes", value: map.keyframeCount.formatted())
                     }
                 }
             }

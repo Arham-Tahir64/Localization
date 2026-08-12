@@ -241,8 +241,8 @@ struct ExperienceScreen: View {
             ? "\(sourceCount.formatted()) LANDMARKS"
             : "\(renderedCount.formatted()) OF \(sourceCount.formatted()) SHOWN"
         return sourceTriangles > 0
-            ? "\(landmarkText) • \(sourceTriangles.formatted()) TRIANGLES"
-            : landmarkText
+            ? "\(landmarkText) • \(sourceTriangles.formatted()) TRI • \(controller.mappingKeyframeCount) KF"
+            : "\(landmarkText) • \(controller.mappingKeyframeCount) KF"
     }
 
     private var isScanReticleActive: Bool {

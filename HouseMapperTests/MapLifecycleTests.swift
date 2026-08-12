@@ -1,4 +1,6 @@
 import XCTest
+import ARKit
+import simd
 @testable import HouseMapper
 
 @MainActor
@@ -175,6 +177,7 @@ final class MapLifecycleTests: XCTestCase {
                 meshAnchorCount: 0,
                 meshVertexCount: 0,
                 meshTriangleCount: 0,
+                keyframeCount: 0,
                 spatialMapByteCount: nil,
                 packageByteCount: nil,
                 ioDuration: 0.2
@@ -220,6 +223,7 @@ final class MapLifecycleTests: XCTestCase {
                 meshAnchorCount: 0,
                 meshVertexCount: 0,
                 meshTriangleCount: 0,
+                keyframeCount: 0,
                 spatialMapByteCount: nil,
                 packageByteCount: nil,
                 ioDuration: nil
@@ -235,6 +239,52 @@ final class MapLifecycleTests: XCTestCase {
             }
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: package.benchmarkURL.path))
+    }
+
+    func testSavedKeyframePackageRoundTripsManifestAndImages() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let mapID = UUID()
+        let capture = PendingMappingKeyframe(
+            id: UUID(),
+            frameID: 1,
+            capturedAt: 2,
+            image: EncodedImageGeometry(width: 1_280, height: 960, orientation: .right, camera: .rearWide),
+            intrinsics: Matrix3x3Record(values: [800, 0, 0, 0, 800, 0, 640, 480, 1]),
+            mapFromCamera: Matrix4x4Record(matrix_identity_float4x4),
+            tracking: .normal,
+            sourceFeatureCount: 500,
+            imageData: Data([0xFF, 0xD8, 0xFF, 0xD9])
+        )
+        let fixturePackage = try writePackage(
+            inside: fixture.maps,
+            name: "Keyframe map",
+            metadataID: mapID,
+            featurePointCount: 0
+        )
+        let keyframesDirectory = fixturePackage.keyframesURL
+        try FileManager.default.createDirectory(
+            at: keyframesDirectory,
+            withIntermediateDirectories: true
+        )
+        try capture.imageData.write(
+            to: keyframesDirectory.appendingPathComponent("\(capture.id.uuidString).jpg")
+        )
+        try MappingKeyframeManifest(mapID: mapID, captures: [capture])
+            .encodedJSON()
+            .write(to: fixturePackage.keyframeManifestURL)
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+
+        let loadedManifest = try await library.loadKeyframeManifest(for: package)
+        let manifest = try XCTUnwrap(loadedManifest)
+
+        XCTAssertEqual(manifest.keyframes.count, 1)
+        XCTAssertEqual(manifest.keyframes.first?.id, capture.id)
+        XCTAssertEqual(
+            try Data(contentsOf: package.keyframesURL.appendingPathComponent("\(capture.id.uuidString).jpg")),
+            capture.imageData
+        )
     }
 
     private func makeFixture() throws -> (root: URL, maps: URL) {

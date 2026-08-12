@@ -3,6 +3,70 @@ import simd
 @testable import HouseMapper
 
 final class FrameObservationTests: XCTestCase {
+    func testKeyframeSelectorUsesMetricTranslationRotationAndQualityGates() {
+        var selector = MappingKeyframeSelector(
+            minimumTranslationMeters: 0.5,
+            minimumRotationRadians: .pi / 6,
+            minimumTimeInterval: 0.75,
+            minimumFeatureCount: 250,
+            maximumKeyframeCount: 3
+        )
+        let identity = matrix_identity_float4x4
+
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 1, mapFromCamera: identity, tracking: .normal, featureCount: 500))
+        selector.commitMostRecentReservation()
+        XCTAssertFalse(selector.reserveIfEligible(timestamp: 1.2, mapFromCamera: translated(x: 2), tracking: .normal, featureCount: 500))
+        XCTAssertFalse(selector.reserveIfEligible(timestamp: 2, mapFromCamera: translated(x: 0.2), tracking: .normal, featureCount: 500))
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 2, mapFromCamera: translated(x: 0.6), tracking: .normal, featureCount: 500))
+        selector.commitMostRecentReservation()
+        XCTAssertFalse(selector.reserveIfEligible(timestamp: 3, mapFromCamera: translated(x: 1.2), tracking: .limitedInsufficientFeatures, featureCount: 500))
+        XCTAssertFalse(selector.reserveIfEligible(timestamp: 3, mapFromCamera: translated(x: 1.2), tracking: .normal, featureCount: 100))
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 3, mapFromCamera: rotatedY(.pi / 3, translatedX: 0.6), tracking: .normal, featureCount: 500))
+        selector.commitMostRecentReservation()
+        XCTAssertFalse(selector.reserveIfEligible(timestamp: 4, mapFromCamera: translated(x: 3), tracking: .normal, featureCount: 500))
+        XCTAssertEqual(selector.reservedCount, 3)
+    }
+
+    func testKeyframeSelectorRollbackRestoresPreviousNoveltyReference() {
+        var selector = MappingKeyframeSelector(
+            minimumTranslationMeters: 0.5,
+            minimumRotationRadians: .pi,
+            minimumTimeInterval: 0,
+            minimumFeatureCount: 1,
+            maximumKeyframeCount: 3
+        )
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 1, mapFromCamera: translated(x: 0), tracking: .normal, featureCount: 10))
+        selector.commitMostRecentReservation()
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 2, mapFromCamera: translated(x: 0.6), tracking: .normal, featureCount: 10))
+        selector.cancelMostRecentReservation()
+
+        XCTAssertTrue(selector.reserveIfEligible(timestamp: 3, mapFromCamera: translated(x: 0.6), tracking: .normal, featureCount: 10))
+        XCTAssertEqual(selector.reservedCount, 2)
+    }
+
+    func testKeyframeManifestRoundTripPreservesCalibrationAndMapFrame() throws {
+        let mapID = UUID()
+        let capture = PendingMappingKeyframe(
+            id: UUID(),
+            frameID: 42,
+            capturedAt: 12.5,
+            image: EncodedImageGeometry(width: 1_280, height: 960, orientation: .right, camera: .rearWide),
+            intrinsics: Matrix3x3Record(values: [800, 0, 0, 0, 800, 0, 640, 480, 1]),
+            mapFromCamera: Matrix4x4Record(matrix_identity_float4x4),
+            tracking: .normal,
+            sourceFeatureCount: 900,
+            imageData: Data([1, 2, 3])
+        )
+        let manifest = try MappingKeyframeManifest(mapID: mapID, captures: [capture])
+
+        let data = try manifest.encodedJSON()
+        let decoded = try MappingKeyframeManifest.decode(data, expectedMapID: mapID)
+
+        XCTAssertEqual(decoded, manifest)
+        XCTAssertEqual(decoded.keyframes.first?.imageFileName, "\(capture.id.uuidString).jpg")
+        XCTAssertEqual(decoded.keyframes.first?.sourceFeatureCount, 900)
+    }
+
     func testEnvelopeRoundTripsWithDepthMetadata() throws {
         let observation = makeObservation()
 
@@ -219,6 +283,14 @@ final class FrameObservationTests: XCTestCase {
         var matrix = simd_float4x4(simd_quatf(angle: yaw, axis: SIMD3(0, 1, 0)))
         matrix.columns.3 = SIMD4(translation.x, translation.y, translation.z, 1)
         return matrix
+    }
+
+    private func translated(x: Float) -> simd_float4x4 {
+        transform(translation: SIMD3(x, 0, 0), yaw: 0)
+    }
+
+    private func rotatedY(_ yaw: Float, translatedX: Float) -> simd_float4x4 {
+        transform(translation: SIMD3(translatedX, 0, 0), yaw: yaw)
     }
 
     private func assertMatrix(
