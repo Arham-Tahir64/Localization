@@ -29,12 +29,13 @@ host measurements, not iPhone 16 Pro latency or energy claims.
 
 | Landmarks | Encoded bytes | Encode | Decode + validation |
 | ---: | ---: | ---: | ---: |
-| 10,000 | 508,334 | 35.725 ms | 43.485 ms |
-| 100,000 | 6,108,464 | 186.119 ms | 347.544 ms |
+| 10,000 | 508,357 | 35.526 ms | 41.080 ms |
+| 100,000 | 6,108,489 | 186.324 ms | 339.664 ms |
 
 Both decoded snapshots were exactly equal to their inputs. The codec rejects a map
 ID mismatch, duplicate identifier, nonfinite coordinate, unsupported schema, or
-bounds inconsistent with the landmark payload.
+bounds inconsistent with the landmark-plus-mesh payload. These values were rerun
+after the schema-2 mesh field was added; it adds only 23–25 bytes when empty.
 
 ## Interpretation and decision
 

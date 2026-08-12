@@ -283,4 +283,46 @@ final class FeaturePointSnapshotTests: XCTestCase {
         XCTAssertEqual(renderSnapshot.points.count, 4)
         XCTAssertEqual(quadrants, [0, 1, 2, 3])
     }
+
+    func testMeshRenderAppliesAnchorTransformAndRetainsRealTriangleEdges() throws {
+        let mesh = try SpatialMeshAnchorRecord(
+            id: UUID(),
+            mapFromAnchor: SpatialTransformRecord(
+                values: [
+                    1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    10, 0, -5, 1
+                ]
+            ),
+            vertices: [
+                Vector3Record(x: 0, y: 0, z: 0),
+                Vector3Record(x: 2, y: 0, z: 0),
+                Vector3Record(x: 0, y: 3, z: 4)
+            ],
+            normals: [],
+            faces: [
+                SpatialMeshFaceRecord(
+                    firstVertexIndex: 0,
+                    secondVertexIndex: 1,
+                    thirdVertexIndex: 2,
+                    classificationRawValue: 1
+                )
+            ]
+        )
+
+        let render = SpatialMeshRenderSnapshot.make(
+            meshAnchors: [mesh],
+            maximumTriangleCount: 10
+        )
+
+        XCTAssertEqual(render.sourceTriangleCount, 1)
+        XCTAssertEqual(render.triangles.count, 1)
+        XCTAssertEqual(render.bounds.minimum, SIMD3(10, 0, -5))
+        XCTAssertEqual(render.bounds.maximum, SIMD3(12, 3, -1))
+        XCTAssertEqual(render.triangles[0].first, SIMD3(10, 0, -5))
+        XCTAssertEqual(render.triangles[0].second, SIMD3(12, 0, -5))
+        XCTAssertEqual(render.triangles[0].third, SIMD3(10, 3, -1))
+        XCTAssertEqual(render.triangles[0].classificationRawValue, 1)
+    }
 }

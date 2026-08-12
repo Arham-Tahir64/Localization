@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MapOverviewView: View {
     let map: SpatialMapRenderSnapshot
+    let mesh: SpatialMeshRenderSnapshot
     let trail: [SIMD2<Float>]
     let pose: CameraPose?
     let accentColor: Color
@@ -25,6 +26,10 @@ struct MapOverviewView: View {
             if map.sourceCount > 0 {
                 include(SIMD2(map.bounds.minimum.x, map.bounds.minimum.z))
                 include(SIMD2(map.bounds.maximum.x, map.bounds.maximum.z))
+            }
+            if mesh.sourceTriangleCount > 0 {
+                include(SIMD2(mesh.bounds.minimum.x, mesh.bounds.minimum.z))
+                include(SIMD2(mesh.bounds.maximum.x, mesh.bounds.maximum.z))
             }
             for index in Swift.stride(from: 0, to: trail.count, by: trailStep) {
                 include(trail[index])
@@ -53,6 +58,21 @@ struct MapOverviewView: View {
                 CGPoint(
                     x: 10 + CGFloat(point.x - minX) * scale,
                     y: size.height - 10 - CGFloat(point.y - minZ) * scale
+                )
+            }
+
+            if !mesh.triangles.isEmpty {
+                var structuralPath = Path()
+                for triangle in mesh.triangles {
+                    structuralPath.move(to: project(SIMD2(triangle.first.x, triangle.first.z)))
+                    structuralPath.addLine(to: project(SIMD2(triangle.second.x, triangle.second.z)))
+                    structuralPath.addLine(to: project(SIMD2(triangle.third.x, triangle.third.z)))
+                    structuralPath.closeSubpath()
+                }
+                context.stroke(
+                    structuralPath,
+                    with: .color(.cyan.opacity(0.22)),
+                    lineWidth: 0.6
                 )
             }
 

@@ -267,7 +267,8 @@ final class MapLibrary: ObservableObject {
                 snapshot = try SpatialMapSnapshot(
                     mapID: package.id,
                     points: worldMap.rawFeaturePoints.points,
-                    identifiers: worldMap.rawFeaturePoints.identifiers
+                    identifiers: worldMap.rawFeaturePoints.identifiers,
+                    meshAnchors: try ARMeshSnapshotExtractor.records(from: worldMap.anchors)
                 )
             }
             guard snapshot.landmarks.count == package.metadata.featurePointCount else {

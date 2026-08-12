@@ -20,6 +20,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var meshDescription = "Checking support"
     @Published private(set) var pose: CameraPose?
     @Published private(set) var mapRenderSnapshot = SpatialMapRenderSnapshot.empty
+    @Published private(set) var meshRenderSnapshot = SpatialMeshRenderSnapshot.empty
     @Published private(set) var trail: [SIMD2<Float>] = []
     @Published private(set) var elapsedRelocalization: TimeInterval = 0
     @Published private(set) var statusMessage: String?
@@ -67,6 +68,7 @@ final class ARSessionController: NSObject, ObservableObject {
     private static let meshUpdateInterval: TimeInterval = 0.2
     private static let timeoutFallbackGrace: TimeInterval = 0.25
     private static let maximumMapRenderPointCount = 4_000
+    private static let maximumMapRenderTriangleCount = 1_500
     private static let maximumScreenFeaturePointCount = 240
     private static let maximumPriorityFeaturePointCount = 120
 
@@ -134,6 +136,10 @@ final class ARSessionController: NSObject, ObservableObject {
                         landmarks: spatialMap.landmarks,
                         maximumCount: Self.maximumMapRenderPointCount
                     )
+                    self.meshRenderSnapshot = SpatialMeshRenderSnapshot.make(
+                        meshAnchors: spatialMap.meshAnchors,
+                        maximumTriangleCount: Self.maximumMapRenderTriangleCount
+                    )
                     self.beginRelocalization(with: worldMap)
                 } catch {
                     self.phase = .failed
@@ -166,6 +172,13 @@ final class ARSessionController: NSObject, ObservableObject {
         statusMessage = "Capturing persistent world map…"
 
         do {
+            // Scene-reconstruction anchors are live session output. Capture the
+            // current ARFrame snapshot explicitly instead of assuming every
+            // automatically generated mesh is present in ARWorldMap.anchors.
+            let currentAnchors = sceneView.session.currentFrame?.anchors ?? []
+            let meshAnchors = try await Task.detached(priority: .userInitiated) {
+                try ARMeshSnapshotExtractor.records(from: currentAnchors)
+            }.value
             let worldMap = try await currentWorldMap(from: sceneView.session)
             if !worldMap.anchors.contains(where: { $0.name == Self.mapOriginAnchorName }) {
                 worldMap.anchors.append(
@@ -181,7 +194,8 @@ final class ARSessionController: NSObject, ObservableObject {
             let spatialMap = try SpatialMapSnapshot(
                 mapID: mapID,
                 points: worldMap.rawFeaturePoints.points,
-                identifiers: worldMap.rawFeaturePoints.identifiers
+                identifiers: worldMap.rawFeaturePoints.identifiers,
+                meshAnchors: meshAnchors
             )
             let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             let fallbackName = now.formatted(
@@ -221,6 +235,10 @@ final class ARSessionController: NSObject, ObservableObject {
             mapRenderSnapshot = SpatialMapRenderSnapshot.make(
                 landmarks: spatialMap.landmarks,
                 maximumCount: Self.maximumMapRenderPointCount
+            )
+            meshRenderSnapshot = SpatialMeshRenderSnapshot.make(
+                meshAnchors: spatialMap.meshAnchors,
+                maximumTriangleCount: Self.maximumMapRenderTriangleCount
             )
             savedPackage = package
             statusMessage = "Map saved locally."
@@ -781,6 +799,184 @@ enum ARSessionControllerError: LocalizedError {
         switch self {
         case .worldMapUnavailable:
             return "ARKit did not produce a world map. Continue scanning and try again."
+        }
+    }
+}
+
+/// Losslessly copies ARKit's transient Metal-backed mesh buffers into the
+/// app-owned persistent map schema. Coordinates remain anchor-local and the
+/// exact `T_map_anchor` transform is stored alongside them.
+enum ARMeshSnapshotExtractor {
+    static func records(from anchors: [ARAnchor]) throws -> [SpatialMeshAnchorRecord] {
+        try anchors.compactMap { anchor in
+            guard let meshAnchor = anchor as? ARMeshAnchor else { return nil }
+            return try record(from: meshAnchor)
+        }
+    }
+
+    private static func record(from anchor: ARMeshAnchor) throws -> SpatialMeshAnchorRecord {
+        let geometry = anchor.geometry
+        let vertices = try vectors(
+            from: geometry.vertices,
+            anchorID: anchor.identifier,
+            semantic: "vertices"
+        )
+        let normals = try vectors(
+            from: geometry.normals,
+            anchorID: anchor.identifier,
+            semantic: "normals"
+        )
+        let classifications = try classifications(
+            from: geometry.classification,
+            expectedCount: geometry.faces.count,
+            anchorID: anchor.identifier
+        )
+        let indices = try triangleIndices(
+            from: geometry.faces,
+            anchorID: anchor.identifier
+        )
+        let faces = indices.enumerated().map { faceIndex, triangle in
+            SpatialMeshFaceRecord(
+                firstVertexIndex: triangle.0,
+                secondVertexIndex: triangle.1,
+                thirdVertexIndex: triangle.2,
+                classificationRawValue: classifications?[faceIndex]
+            )
+        }
+        return try SpatialMeshAnchorRecord(
+            id: anchor.identifier,
+            mapFromAnchor: SpatialTransformRecord(anchor.transform),
+            vertices: vertices,
+            normals: normals,
+            faces: faces
+        )
+    }
+
+    private static func vectors(
+        from source: ARGeometrySource,
+        anchorID: UUID,
+        semantic: String
+    ) throws -> [Vector3Record] {
+        guard source.format == .float3, source.componentsPerVector == 3 else {
+            throw ARMeshSnapshotExtractionError.unsupportedVectorFormat(
+                anchorID: anchorID,
+                semantic: semantic,
+                format: source.format.rawValue,
+                components: source.componentsPerVector
+            )
+        }
+        let componentBytes = MemoryLayout<Float>.size * 3
+        guard source.offset >= 0,
+              source.stride >= componentBytes,
+              source.count >= 0,
+              requiredLength(offset: source.offset, stride: source.stride, count: source.count, itemBytes: componentBytes) <= source.buffer.length else {
+            throw ARMeshSnapshotExtractionError.invalidBufferLayout(anchorID: anchorID, semantic: semantic)
+        }
+        let buffer = UnsafeRawPointer(source.buffer.contents())
+        return (0..<source.count).map { index in
+            let offset = source.offset + index * source.stride
+            return Vector3Record(
+                x: buffer.loadUnaligned(fromByteOffset: offset, as: Float.self),
+                y: buffer.loadUnaligned(fromByteOffset: offset + 4, as: Float.self),
+                z: buffer.loadUnaligned(fromByteOffset: offset + 8, as: Float.self)
+            )
+        }
+    }
+
+    private static func triangleIndices(
+        from element: ARGeometryElement,
+        anchorID: UUID
+    ) throws -> [(UInt32, UInt32, UInt32)] {
+        guard element.primitiveType == .triangle, element.indexCountPerPrimitive == 3 else {
+            throw ARMeshSnapshotExtractionError.unsupportedPrimitive(anchorID: anchorID)
+        }
+        guard element.bytesPerIndex == 2 || element.bytesPerIndex == 4 else {
+            throw ARMeshSnapshotExtractionError.unsupportedIndexWidth(
+                anchorID: anchorID,
+                bytesPerIndex: element.bytesPerIndex
+            )
+        }
+        let itemBytes = element.bytesPerIndex * 3
+        guard element.count >= 0,
+              requiredLength(offset: 0, stride: itemBytes, count: element.count, itemBytes: itemBytes) <= element.buffer.length else {
+            throw ARMeshSnapshotExtractionError.invalidBufferLayout(anchorID: anchorID, semantic: "faces")
+        }
+        let buffer = UnsafeRawPointer(element.buffer.contents())
+        return (0..<element.count).map { faceIndex in
+            let base = faceIndex * itemBytes
+            if element.bytesPerIndex == 2 {
+                return (
+                    UInt32(buffer.loadUnaligned(fromByteOffset: base, as: UInt16.self)),
+                    UInt32(buffer.loadUnaligned(fromByteOffset: base + 2, as: UInt16.self)),
+                    UInt32(buffer.loadUnaligned(fromByteOffset: base + 4, as: UInt16.self))
+                )
+            }
+            return (
+                buffer.loadUnaligned(fromByteOffset: base, as: UInt32.self),
+                buffer.loadUnaligned(fromByteOffset: base + 4, as: UInt32.self),
+                buffer.loadUnaligned(fromByteOffset: base + 8, as: UInt32.self)
+            )
+        }
+    }
+
+    private static func classifications(
+        from source: ARGeometrySource?,
+        expectedCount: Int,
+        anchorID: UUID
+    ) throws -> [Int]? {
+        guard let source else { return nil }
+        guard source.format == .uchar, source.componentsPerVector == 1 else {
+            throw ARMeshSnapshotExtractionError.unsupportedClassificationFormat(
+                anchorID: anchorID,
+                format: source.format.rawValue,
+                components: source.componentsPerVector
+            )
+        }
+        guard source.count == expectedCount,
+              source.offset >= 0,
+              source.stride >= 1,
+              requiredLength(offset: source.offset, stride: source.stride, count: source.count, itemBytes: 1) <= source.buffer.length else {
+            throw ARMeshSnapshotExtractionError.invalidBufferLayout(anchorID: anchorID, semantic: "classification")
+        }
+        let buffer = UnsafeRawPointer(source.buffer.contents())
+        return (0..<source.count).map { index in
+            Int(buffer.loadUnaligned(fromByteOffset: source.offset + index * source.stride, as: UInt8.self))
+        }
+    }
+
+    private static func requiredLength(
+        offset: Int,
+        stride: Int,
+        count: Int,
+        itemBytes: Int
+    ) -> Int {
+        guard count > 0 else { return max(offset, 0) }
+        let (strideBytes, strideOverflow) = (count - 1).multipliedReportingOverflow(by: stride)
+        let (prefixBytes, prefixOverflow) = offset.addingReportingOverflow(strideBytes)
+        let (totalBytes, totalOverflow) = prefixBytes.addingReportingOverflow(itemBytes)
+        return strideOverflow || prefixOverflow || totalOverflow ? .max : totalBytes
+    }
+}
+
+enum ARMeshSnapshotExtractionError: LocalizedError {
+    case unsupportedVectorFormat(anchorID: UUID, semantic: String, format: UInt, components: Int)
+    case unsupportedPrimitive(anchorID: UUID)
+    case unsupportedIndexWidth(anchorID: UUID, bytesPerIndex: Int)
+    case unsupportedClassificationFormat(anchorID: UUID, format: UInt, components: Int)
+    case invalidBufferLayout(anchorID: UUID, semantic: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedVectorFormat(let id, let semantic, let format, let components):
+            return "Mesh anchor \(id) has unsupported \(semantic) format \(format) with \(components) components."
+        case .unsupportedPrimitive(let id):
+            return "Mesh anchor \(id) does not contain triangle primitives."
+        case .unsupportedIndexWidth(let id, let bytes):
+            return "Mesh anchor \(id) uses an unsupported \(bytes)-byte triangle index."
+        case .unsupportedClassificationFormat(let id, let format, let components):
+            return "Mesh anchor \(id) has unsupported classification format \(format) with \(components) components."
+        case .invalidBufferLayout(let id, let semantic):
+            return "Mesh anchor \(id) has an invalid \(semantic) buffer layout."
         }
     }
 }

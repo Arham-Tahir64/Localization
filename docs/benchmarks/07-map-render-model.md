@@ -31,9 +31,9 @@ or energy measurements.
 
 | Source landmarks | Iterations | Render landmarks | Mean model-build time |
 | ---: | ---: | ---: | ---: |
-| 10,000 | 200 | 4,000 | 0.4030 ms |
-| 100,000 | 40 | 4,000 | 1.6847 ms |
-| 1,000,000 | 4 | 4,000 | 10.2398 ms |
+| 10,000 | 200 | 4,000 | 0.5295 ms |
+| 100,000 | 40 | 4,000 | 1.8478 ms |
+| 1,000,000 | 4 | 4,000 | 10.6854 ms |
 
 Every result retained the full source count and exact full-cloud 3D bounds while
 limiting drawing input to 4,000 real landmarks. The checksum remained stable for
@@ -41,7 +41,7 @@ every iteration.
 
 The same harness also simulated 120 mapping publications of 1,000 real
 observations each, with 500 IDs overlapping the previous publication. The bounded
-accumulator retained the 50,000 most recently observed IDs and averaged **4.2255
+accumulator retained the 50,000 most recently observed IDs and averaged **4.3444
 ms** per integrate-plus-4,000-point-render-snapshot operation on this host. This
 includes repeated rendering-model construction and several bounded evictions.
 

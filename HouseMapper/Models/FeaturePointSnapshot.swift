@@ -94,6 +94,109 @@ struct SpatialMapRenderBounds: Equatable, Sendable {
     let maximum: SIMD3<Float>
 }
 
+struct SpatialMeshRenderTriangle: Equatable, Sendable {
+    let first: SIMD3<Float>
+    let second: SIMD3<Float>
+    let third: SIMD3<Float>
+    let classificationRawValue: Int?
+}
+
+struct SpatialMeshRenderSnapshot: Equatable, Sendable {
+    static let empty = SpatialMeshRenderSnapshot(
+        triangles: [],
+        sourceTriangleCount: 0,
+        bounds: SpatialMapRenderBounds(minimum: .zero, maximum: .zero)
+    )
+
+    let triangles: [SpatialMeshRenderTriangle]
+    let sourceTriangleCount: Int
+    /// Exact bounds of every source mesh vertex in the saved map frame.
+    let bounds: SpatialMapRenderBounds
+
+    static func make(
+        meshAnchors: [SpatialMeshAnchorRecord],
+        maximumTriangleCount: Int
+    ) -> SpatialMeshRenderSnapshot {
+        let sourceTriangleCount = meshAnchors.reduce(0) { $0 + $1.faces.count }
+        let bounds = renderBounds(for: meshAnchors)
+        guard maximumTriangleCount > 0, sourceTriangleCount > 0 else {
+            return SpatialMeshRenderSnapshot(
+                triangles: [],
+                sourceTriangleCount: sourceTriangleCount,
+                bounds: bounds
+            )
+        }
+        let strideSize = max(1, Int(ceil(Double(sourceTriangleCount) / Double(maximumTriangleCount))))
+        var triangles: [SpatialMeshRenderTriangle] = []
+        triangles.reserveCapacity(min(sourceTriangleCount, maximumTriangleCount))
+        var globalFaceIndex = 0
+
+        for anchor in meshAnchors {
+            guard let mapFromAnchor = anchor.mapFromAnchor.simdMatrix() else {
+                globalFaceIndex += anchor.faces.count
+                continue
+            }
+            for face in anchor.faces {
+                defer { globalFaceIndex += 1 }
+                guard globalFaceIndex.isMultiple(of: strideSize),
+                      triangles.count < maximumTriangleCount else { continue }
+                let first = transformed(
+                    anchor.vertices[Int(face.firstVertexIndex)],
+                    by: mapFromAnchor
+                )
+                let second = transformed(
+                    anchor.vertices[Int(face.secondVertexIndex)],
+                    by: mapFromAnchor
+                )
+                let third = transformed(
+                    anchor.vertices[Int(face.thirdVertexIndex)],
+                    by: mapFromAnchor
+                )
+                triangles.append(
+                    SpatialMeshRenderTriangle(
+                        first: first,
+                        second: second,
+                        third: third,
+                        classificationRawValue: face.classificationRawValue
+                    )
+                )
+            }
+        }
+        return SpatialMeshRenderSnapshot(
+            triangles: triangles,
+            sourceTriangleCount: sourceTriangleCount,
+            bounds: bounds
+        )
+    }
+
+    private static func renderBounds(
+        for meshAnchors: [SpatialMeshAnchorRecord]
+    ) -> SpatialMapRenderBounds {
+        var minimum = SIMD3<Float>(repeating: .infinity)
+        var maximum = SIMD3<Float>(repeating: -.infinity)
+        for anchor in meshAnchors {
+            guard let mapFromAnchor = anchor.mapFromAnchor.simdMatrix() else { continue }
+            for vertex in anchor.vertices {
+                let point = transformed(vertex, by: mapFromAnchor)
+                minimum = simd_min(minimum, point)
+                maximum = simd_max(maximum, point)
+            }
+        }
+        guard minimum.x.isFinite else {
+            return SpatialMapRenderBounds(minimum: .zero, maximum: .zero)
+        }
+        return SpatialMapRenderBounds(minimum: minimum, maximum: maximum)
+    }
+
+    private static func transformed(
+        _ point: Vector3Record,
+        by matrix: simd_float4x4
+    ) -> SIMD3<Float> {
+        let result = simd_mul(matrix, SIMD4(point.x, point.y, point.z, 1))
+        return SIMD3(result.x, result.y, result.z)
+    }
+}
+
 struct SpatialMapRenderSnapshot: Equatable, Sendable {
     static let empty = SpatialMapRenderSnapshot(
         points: [],

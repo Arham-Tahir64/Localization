@@ -233,6 +233,126 @@ final class MapLifecycleTests: XCTestCase {
 }
 
 final class SpatialMapSnapshotTests: XCTestCase {
+    func testBinaryRoundTripPreservesMeshTransformTopologyAndClassification() throws {
+        let mapID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let anchorID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let mesh = try SpatialMeshAnchorRecord(
+            id: anchorID,
+            mapFromAnchor: SpatialTransformRecord(
+                values: [
+                    1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    4, 5, 6, 1
+                ]
+            ),
+            vertices: [
+                Vector3Record(x: 0, y: 0, z: 0),
+                Vector3Record(x: 1, y: 0, z: 0),
+                Vector3Record(x: 0, y: 1, z: 0)
+            ],
+            normals: [
+                Vector3Record(x: 0, y: 0, z: 1),
+                Vector3Record(x: 0, y: 0, z: 1),
+                Vector3Record(x: 0, y: 0, z: 1)
+            ],
+            faces: [
+                SpatialMeshFaceRecord(
+                    firstVertexIndex: 0,
+                    secondVertexIndex: 1,
+                    thirdVertexIndex: 2,
+                    classificationRawValue: 1
+                )
+            ]
+        )
+        let snapshot = try SpatialMapSnapshot(
+            mapID: mapID,
+            landmarks: [],
+            meshAnchors: [mesh]
+        )
+
+        let decoded = try SpatialMapSnapshotCodec.decode(
+            SpatialMapSnapshotCodec.encode(snapshot),
+            expectedMapID: mapID
+        )
+
+        XCTAssertEqual(decoded, snapshot)
+        XCTAssertEqual(decoded.meshAnchors.first?.id, anchorID)
+        XCTAssertEqual(decoded.meshAnchors.first?.faces.first?.classificationRawValue, 1)
+    }
+
+    func testDecodeAcceptsLegacyLandmarkOnlySnapshot() throws {
+        struct LegacySnapshot: Codable {
+            let schemaVersion: Int
+            let mapID: UUID
+            let landmarks: [SpatialLandmarkRecord]
+            let bounds: SpatialBoundsRecord
+        }
+        let mapID = UUID()
+        let legacy = LegacySnapshot(
+            schemaVersion: 1,
+            mapID: mapID,
+            landmarks: [],
+            bounds: SpatialBoundsRecord(
+                minimum: Vector3Record(x: 0, y: 0, z: 0),
+                maximum: Vector3Record(x: 0, y: 0, z: 0)
+            )
+        )
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+
+        let decoded = try SpatialMapSnapshotCodec.decode(
+            encoder.encode(legacy),
+            expectedMapID: mapID
+        )
+
+        XCTAssertTrue(decoded.meshAnchors.isEmpty)
+        XCTAssertEqual(decoded.schemaVersion, 1)
+    }
+
+    func testMeshRejectsOutOfRangeTriangleIndex() {
+        XCTAssertThrowsError(
+            try SpatialMeshAnchorRecord(
+                id: UUID(),
+                mapFromAnchor: .identity,
+                vertices: [Vector3Record(x: 0, y: 0, z: 0)],
+                normals: [],
+                faces: [
+                    SpatialMeshFaceRecord(
+                        firstVertexIndex: 0,
+                        secondVertexIndex: 1,
+                        thirdVertexIndex: 0,
+                        classificationRawValue: nil
+                    )
+                ]
+            )
+        )
+    }
+
+    func testSnapshotRejectsDuplicateMeshAnchorIdentifiers() throws {
+        let anchorID = UUID()
+        let mesh = try SpatialMeshAnchorRecord(
+            id: anchorID,
+            mapFromAnchor: .identity,
+            vertices: [],
+            normals: [],
+            faces: []
+        )
+
+        XCTAssertThrowsError(
+            try SpatialMapSnapshot(
+                mapID: UUID(),
+                landmarks: [],
+                meshAnchors: [mesh, mesh]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SpatialMapSnapshotError,
+                .duplicateMeshAnchorIdentifier(anchorID)
+            )
+        }
+    }
+
     func testBinaryRoundTripPreservesEveryLandmarkAndBounds() throws {
         let mapID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let landmarks = [

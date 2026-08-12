@@ -82,6 +82,7 @@ struct ExperienceScreen: View {
                 HStack(spacing: 10) {
                     MapOverviewView(
                         map: controller.mapRenderSnapshot,
+                        mesh: controller.meshRenderSnapshot,
                         trail: controller.trail,
                         pose: controller.pose,
                         accentColor: experienceColor
@@ -225,19 +226,23 @@ struct ExperienceScreen: View {
     private var mapPanelTitle: String {
         switch mode {
         case .mapping:
-            return "LIVE LANDMARK MAP"
+            return "LIVE SPATIAL MAP"
         case .relocalization:
-            return "SAVED LANDMARK MAP"
+            return "SAVED SPATIAL MAP"
         }
     }
 
     private var mapPanelCount: String {
         let sourceCount = controller.mapRenderSnapshot.sourceCount
-        guard sourceCount > 0 else { return "WAITING FOR LANDMARKS" }
+        let sourceTriangles = controller.meshRenderSnapshot.sourceTriangleCount
+        guard sourceCount > 0 || sourceTriangles > 0 else { return "WAITING FOR GEOMETRY" }
         let renderedCount = controller.mapRenderSnapshot.points.count
-        return renderedCount == sourceCount
+        let landmarkText = renderedCount == sourceCount
             ? "\(sourceCount.formatted()) LANDMARKS"
             : "\(renderedCount.formatted()) OF \(sourceCount.formatted()) SHOWN"
+        return sourceTriangles > 0
+            ? "\(landmarkText) • \(sourceTriangles.formatted()) TRIANGLES"
+            : landmarkText
     }
 
     private var isScanReticleActive: Bool {
