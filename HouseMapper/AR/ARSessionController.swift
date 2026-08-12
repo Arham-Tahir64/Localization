@@ -27,6 +27,7 @@ final class ARSessionController: NSObject, ObservableObject {
     @Published private(set) var isSaving = false
     @Published private(set) var savedPackage: MapPackage?
     @Published private(set) var canSave = false
+    @Published private(set) var benchmarkReport: SessionBenchmarkReport?
 
     let mode: ExperienceMode
 
@@ -51,6 +52,8 @@ final class ARSessionController: NSObject, ObservableObject {
         maximumRetainedLandmarks: 50_000
     )
     private var captureDiagnostics = CaptureDiagnosticsAccumulator()
+    private var benchmarkAccumulator = SessionBenchmarkAccumulator(startedAt: Date())
+    private var benchmarkMapMetrics: MapBenchmarkMetrics?
     private var savedFeatureIdentifiers: Set<UInt64> = []
     private var lastMeshUpdateByAnchor: [UUID: TimeInterval] = [:]
     private lazy var meshVisualizationMaterial: SCNMaterial = {
@@ -126,8 +129,10 @@ final class ARSessionController: NSObject, ObservableObject {
             Task { [weak self] in
                 guard let self else { return }
                 do {
+                    let loadStart = ProcessInfo.processInfo.systemUptime
                     let worldMap = try await mapLibrary.loadWorldMap(from: package)
                     let spatialMap = try await mapLibrary.loadSpatialMap(from: package)
+                    let storage = try await mapLibrary.benchmarkStorageMetrics(for: package)
                     guard self.hasStarted else { return }
                     self.loadedWorldMap = worldMap
                     self.loadedSpatialMap = spatialMap
@@ -140,6 +145,13 @@ final class ARSessionController: NSObject, ObservableObject {
                         meshAnchors: spatialMap.meshAnchors,
                         maximumTriangleCount: Self.maximumMapRenderTriangleCount
                     )
+                    let metrics = Self.makeMapBenchmarkMetrics(
+                        package: package,
+                        spatialMap: spatialMap,
+                        storage: storage,
+                        ioDuration: ProcessInfo.processInfo.systemUptime - loadStart
+                    )
+                    self.benchmarkMapMetrics = metrics
                     self.beginRelocalization(with: worldMap)
                 } catch {
                     self.phase = .failed
@@ -170,6 +182,7 @@ final class ARSessionController: NSObject, ObservableObject {
 
         isSaving = true
         statusMessage = "Capturing persistent world map…"
+        let persistenceStart = ProcessInfo.processInfo.systemUptime
 
         do {
             // Scene-reconstruction anchors are live session output. Capture the
@@ -242,6 +255,23 @@ final class ARSessionController: NSObject, ObservableObject {
             )
             savedPackage = package
             statusMessage = "Map saved locally."
+
+            do {
+                let storage = try await mapLibrary.benchmarkStorageMetrics(for: package)
+                let metrics = Self.makeMapBenchmarkMetrics(
+                    package: package,
+                    spatialMap: spatialMap,
+                    storage: storage,
+                    ioDuration: ProcessInfo.processInfo.systemUptime - persistenceStart
+                )
+                benchmarkMapMetrics = metrics
+                benchmarkAccumulator.recordMap(metrics)
+                let report = currentBenchmarkReport(completedAt: Date())
+                try await mapLibrary.saveBenchmark(report, for: package)
+                benchmarkReport = report
+            } catch {
+                statusMessage = "Map saved; device benchmark unavailable: \(error.localizedDescription)"
+            }
         } catch {
             statusMessage = "Save failed: \(error.localizedDescription)"
         }
@@ -251,6 +281,9 @@ final class ARSessionController: NSObject, ObservableObject {
 
     private func beginRelocalization(with worldMap: ARWorldMap) {
         guard let sceneView else { return }
+        benchmarkAccumulator = SessionBenchmarkAccumulator(startedAt: Date())
+        if let benchmarkMapMetrics { benchmarkAccumulator.recordMap(benchmarkMapMetrics) }
+        benchmarkReport = nil
         originAnchorSeen = false
         relocalizationMachine.reset()
         pose = nil
@@ -339,6 +372,12 @@ final class ARSessionController: NSObject, ObservableObject {
 
     private func consume(frame: ARFrame) {
         let imageResolution = frame.camera.imageResolution
+        benchmarkAccumulator.recordFrame(
+            timestamp: frame.timestamp,
+            cameraWidth: Int(imageResolution.width),
+            cameraHeight: Int(imageResolution.height),
+            trackingCategory: Self.trackingBenchmarkCategory(frame.camera.trackingState)
+        )
         if let captureSnapshot = captureDiagnostics.record(
             timestamp: frame.timestamp,
             imageWidth: Int(imageResolution.width),
@@ -462,7 +501,7 @@ final class ARSessionController: NSObject, ObservableObject {
         lastFeatureOverlayTimestamp = frame.timestamp
 
         guard let pointCloud = frame.rawFeaturePoints else {
-            if featurePointSnapshot != .empty { featurePointSnapshot = .empty }
+            publishEmptyFeatureSnapshot(timestamp: frame.timestamp)
             return
         }
 
@@ -470,7 +509,7 @@ final class ARSessionController: NSObject, ObservableObject {
         let identifiers = pointCloud.identifiers
         let sourceCount = min(points.count, identifiers.count)
         guard sourceCount > 0 else {
-            if featurePointSnapshot != .empty { featurePointSnapshot = .empty }
+            publishEmptyFeatureSnapshot(timestamp: frame.timestamp)
             return
         }
 
@@ -560,7 +599,7 @@ final class ARSessionController: NSObject, ObservableObject {
             ? visibleCandidates.lazy.filter { self.savedFeatureIdentifiers.contains($0.id) }.count
             : 0
 
-        featurePointSnapshot = FeaturePointSnapshot(
+        let snapshot = FeaturePointSnapshot(
             points: projectedPoints,
             observedCount: sourceCount,
             visibleCount: visibleCandidates.count,
@@ -570,6 +609,23 @@ final class ARSessionController: NSObject, ObservableObject {
             mapIdentityMatchCount: identityMatchCount,
             timestamp: frame.timestamp
         )
+        featurePointSnapshot = snapshot
+        benchmarkAccumulator.recordFeatureSnapshot(snapshot)
+    }
+
+    private func publishEmptyFeatureSnapshot(timestamp: TimeInterval) {
+        let snapshot = FeaturePointSnapshot(
+            points: [],
+            observedCount: 0,
+            visibleCount: 0,
+            rejectedBehindCameraCount: 0,
+            rejectedInvalidProjectionCount: 0,
+            rejectedOutsideViewportCount: 0,
+            mapIdentityMatchCount: 0,
+            timestamp: timestamp
+        )
+        if featurePointSnapshot != snapshot { featurePointSnapshot = snapshot }
+        benchmarkAccumulator.recordFeatureSnapshot(snapshot)
     }
 
     private func updateTrackingDescription(_ state: ARCamera.TrackingState) {
@@ -662,30 +718,97 @@ final class ARSessionController: NSObject, ObservableObject {
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
         var detail = "\(width)×\(height) depth"
-
-        if let confidenceMap = depthData.confidenceMap,
-           CVPixelBufferGetPixelFormatType(confidenceMap) == kCVPixelFormatType_OneComponent8 {
-            CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly) }
-            if let base = CVPixelBufferGetBaseAddress(confidenceMap) {
-                let bytesPerRow = CVPixelBufferGetBytesPerRow(confidenceMap)
-                let confidenceWidth = CVPixelBufferGetWidth(confidenceMap)
-                let confidenceHeight = CVPixelBufferGetHeight(confidenceMap)
-                var high = 0
-                var sampled = 0
-                for y in stride(from: 0, to: confidenceHeight, by: 4) {
-                    let row = base.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt8.self)
-                    for x in stride(from: 0, to: confidenceWidth, by: 4) {
-                        sampled += 1
-                        if row[x] == UInt8(ARConfidenceLevel.high.rawValue) { high += 1 }
-                    }
-                }
-                if sampled > 0 {
-                    detail += " • \(Int((Double(high) / Double(sampled)) * 100))% high confidence"
-                }
-            }
+        let confidenceFraction = Self.highConfidenceFraction(in: depthData)
+        if let confidenceFraction {
+            detail += " • \(Int(confidenceFraction * 100))% high confidence"
         }
         if depthDescription != detail { depthDescription = detail }
+        benchmarkAccumulator.recordDepth(
+            DepthBenchmarkMetrics(
+                width: width,
+                height: height,
+                highConfidenceFraction: confidenceFraction
+            )
+        )
+    }
+
+    func currentBenchmarkReport(completedAt: Date = Date()) -> SessionBenchmarkReport {
+        benchmarkAccumulator.makeReport(
+            mode: mode.benchmarkMode,
+            completedAt: completedAt,
+            deviceModel: Self.hardwareModelIdentifier,
+            systemVersion: UIDevice.current.systemVersion,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        )
+    }
+
+    private static func makeMapBenchmarkMetrics(
+        package: MapPackage,
+        spatialMap: SpatialMapSnapshot,
+        storage: (spatialMapByteCount: Int?, packageByteCount: Int64),
+        ioDuration: TimeInterval
+    ) -> MapBenchmarkMetrics {
+        MapBenchmarkMetrics(
+            mapID: package.id,
+            mapName: package.metadata.name,
+            landmarkCount: spatialMap.landmarks.count,
+            meshAnchorCount: spatialMap.meshAnchors.count,
+            meshVertexCount: spatialMap.meshAnchors.reduce(0) { $0 + $1.vertices.count },
+            meshTriangleCount: spatialMap.meshAnchors.reduce(0) { $0 + $1.faces.count },
+            spatialMapByteCount: storage.spatialMapByteCount,
+            packageByteCount: storage.packageByteCount,
+            ioDuration: max(0, ioDuration)
+        )
+    }
+
+    private static func trackingBenchmarkCategory(
+        _ state: ARCamera.TrackingState
+    ) -> TrackingBenchmarkCategory {
+        switch state {
+        case .normal:
+            return .normal
+        case .notAvailable:
+            return .unavailable
+        case .limited(let reason):
+            switch reason {
+            case .initializing: return .limitedInitializing
+            case .excessiveMotion: return .limitedExcessiveMotion
+            case .insufficientFeatures: return .limitedInsufficientFeatures
+            case .relocalizing: return .limitedRelocalizing
+            @unknown default: return .limitedOther
+            }
+        }
+    }
+
+    private static func highConfidenceFraction(in depthData: ARDepthData) -> Double? {
+        guard let confidenceMap = depthData.confidenceMap,
+              CVPixelBufferGetPixelFormatType(confidenceMap) == kCVPixelFormatType_OneComponent8 else {
+            return nil
+        }
+        CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(confidenceMap, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(confidenceMap) else { return nil }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(confidenceMap)
+        let width = CVPixelBufferGetWidth(confidenceMap)
+        let height = CVPixelBufferGetHeight(confidenceMap)
+        var high = 0
+        var sampled = 0
+        for y in stride(from: 0, to: height, by: 4) {
+            let row = base.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt8.self)
+            for x in stride(from: 0, to: width, by: 4) {
+                sampled += 1
+                if row[x] == UInt8(ARConfidenceLevel.high.rawValue) { high += 1 }
+            }
+        }
+        return sampled > 0 ? Double(high) / Double(sampled) : nil
+    }
+
+    private static var hardwareModelIdentifier: String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        return withUnsafeBytes(of: &systemInfo.machine) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
     }
 
 }

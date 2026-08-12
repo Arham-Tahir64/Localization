@@ -13,6 +13,13 @@ enum ExperienceMode: Equatable {
             return package.metadata.name
         }
     }
+
+    var benchmarkMode: BenchmarkSessionMode {
+        switch self {
+        case .mapping: return .mapping
+        case .relocalization: return .relocalization
+        }
+    }
 }
 
 enum LocalizationPhase: String {

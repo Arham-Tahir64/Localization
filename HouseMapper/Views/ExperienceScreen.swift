@@ -383,7 +383,8 @@ struct ExperienceScreen: View {
                 endConfidenceLabel: controller.confidence.rawValue,
                 finalPosition: finalPosition,
                 finalOrientation: finalOrientation,
-                notes: notes
+                notes: notes,
+                benchmark: controller.currentBenchmarkReport()
             )
         )
         validationAttemptRecorded = true

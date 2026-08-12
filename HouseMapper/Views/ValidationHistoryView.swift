@@ -94,6 +94,39 @@ private struct ValidationDetailView: View {
                 LabeledContent("End confidence", value: record.endConfidenceLabel)
             }
 
+            if let benchmark = record.benchmark {
+                Section("Device benchmark") {
+                    LabeledContent(
+                        "Camera",
+                        value: "\(benchmark.runtime.cameraWidth)×\(benchmark.runtime.cameraHeight)"
+                    )
+                    LabeledContent(
+                        "Delivered FPS",
+                        value: benchmark.runtime.effectiveFramesPerSecond.formatted(
+                            .number.precision(.fractionLength(1))
+                        )
+                    )
+                    if let features = benchmark.features {
+                        LabeledContent(
+                            "Mean source / visible",
+                            value: "\(Int(features.meanObservedCount.rounded())) / \(Int(features.meanVisibleCount.rounded()))"
+                        )
+                        LabeledContent(
+                            "Mean displayed",
+                            value: Int(features.meanDisplayedCount.rounded()).formatted()
+                        )
+                        LabeledContent(
+                            "Display-capped samples",
+                            value: "\(features.displayCappedSampleCount) of \(features.sampleCount)"
+                        )
+                    }
+                    if let map = benchmark.map {
+                        LabeledContent("Saved landmarks", value: map.landmarkCount.formatted())
+                        LabeledContent("Saved mesh triangles", value: map.meshTriangleCount.formatted())
+                    }
+                }
+            }
+
             if record.finalPosition != nil || record.finalOrientation != nil {
                 Section("Final pose") {
                     if let position = record.finalPosition {
@@ -113,6 +146,17 @@ private struct ValidationDetailView: View {
         }
         .navigationTitle("Validation Detail")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let benchmarkJSON {
+                ShareLink(
+                    item: benchmarkJSON,
+                    subject: Text("HouseMapper device benchmark"),
+                    message: Text("Real on-device mapping and relocalization metrics")
+                ) {
+                    Label("Share Benchmark", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
     }
 
     private func vectorText(_ position: ValidationPosition) -> String {
@@ -126,5 +170,11 @@ private struct ValidationDetailView: View {
             orientation.yaw * 180 / .pi,
             orientation.roll * 180 / .pi
         )
+    }
+
+    private var benchmarkJSON: String? {
+        guard let benchmark = record.benchmark,
+              let data = try? benchmark.encodedJSON() else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

@@ -281,6 +281,53 @@ final class MapLibrary: ObservableObject {
         }.value
     }
 
+    func saveBenchmark(_ report: SessionBenchmarkReport, for package: MapPackage) async throws {
+        guard report.map?.mapID == package.id else {
+            throw MapLibraryError.invalidBenchmark
+        }
+        let mapsDirectory = mapsDirectory
+        let data = try report.encodedJSON()
+        try await Task.detached(priority: .utility) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            try data.write(
+                to: directory.appendingPathComponent("benchmark.json"),
+                options: .atomic
+            )
+        }.value
+        refresh()
+    }
+
+    func loadBenchmark(for package: MapPackage) async throws -> SessionBenchmarkReport? {
+        let mapsDirectory = mapsDirectory
+        return try await Task.detached(priority: .utility) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let url = directory.appendingPathComponent("benchmark.json")
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let report = try decoder.decode(SessionBenchmarkReport.self, from: data)
+            guard report.schemaVersion == SessionBenchmarkReport.currentSchemaVersion,
+                  report.map?.mapID == package.id else {
+                throw MapLibraryError.invalidBenchmark
+            }
+            return report
+        }.value
+    }
+
+    func benchmarkStorageMetrics(for package: MapPackage) async throws -> (
+        spatialMapByteCount: Int?,
+        packageByteCount: Int64
+    ) {
+        let mapsDirectory = mapsDirectory
+        return try await Task.detached(priority: .utility) {
+            let directory = try Self.validatedDirectory(for: package, inside: mapsDirectory)
+            let spatialMapURL = directory.appendingPathComponent("spatial-map.plist")
+            let spatialBytes = try? spatialMapURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
+            return (spatialBytes, Self.packageSize(at: directory))
+        }.value
+    }
+
     private func loadPackageSizes(for packages: [MapPackage]) {
         sizeLoadingTask?.cancel()
         let generation = UUID()
@@ -360,6 +407,7 @@ enum MapLibraryError: LocalizedError {
     case packageIdentifierMismatch
     case packageNotFound
     case packageAlreadyExists
+    case invalidBenchmark
     case spatialMapFeatureCountMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
@@ -376,6 +424,8 @@ enum MapLibraryError: LocalizedError {
             return "The selected map is no longer available."
         case .packageAlreadyExists:
             return "A map package with this identifier already exists."
+        case .invalidBenchmark:
+            return "The saved device benchmark does not match this map package."
         case .spatialMapFeatureCountMismatch(let expected, let actual):
             return "The saved map metadata reports \(expected) landmarks, but its spatial payload contains \(actual)."
         }

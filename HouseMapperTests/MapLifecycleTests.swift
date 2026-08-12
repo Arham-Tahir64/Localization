@@ -145,6 +145,98 @@ final class MapLifecycleTests: XCTestCase {
         }
     }
 
+    func testBenchmarkReportPersistsInsideValidatedPackage() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try writePackage(inside: fixture.maps)
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+        let report = SessionBenchmarkReport(
+            sessionID: UUID(),
+            mode: .mapping,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            completedAt: Date(timeIntervalSince1970: 1_010),
+            deviceModel: "iPhone17,1",
+            systemVersion: "26.6",
+            appVersion: "1.0",
+            runtime: SessionRuntimeMetrics(
+                frameCount: 600,
+                cameraWidth: 1_920,
+                cameraHeight: 1_440,
+                effectiveFramesPerSecond: 60,
+                trackingSampleCounts: [.normal: 600]
+            ),
+            features: nil,
+            depth: nil,
+            map: MapBenchmarkMetrics(
+                mapID: package.id,
+                mapName: package.metadata.name,
+                landmarkCount: package.metadata.featurePointCount,
+                meshAnchorCount: 0,
+                meshVertexCount: 0,
+                meshTriangleCount: 0,
+                spatialMapByteCount: nil,
+                packageByteCount: nil,
+                ioDuration: 0.2
+            )
+        )
+
+        try await library.saveBenchmark(report, for: package)
+
+        let data = try Data(contentsOf: package.benchmarkURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(SessionBenchmarkReport.self, from: data)
+        XCTAssertEqual(decoded, report)
+    }
+
+    func testBenchmarkReportRejectsAnotherMapIdentifier() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try writePackage(inside: fixture.maps)
+        let library = MapLibrary(mapsDirectory: fixture.maps)
+        let package = try XCTUnwrap(library.maps.first)
+        let report = SessionBenchmarkReport(
+            sessionID: UUID(),
+            mode: .mapping,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            completedAt: Date(timeIntervalSince1970: 1_010),
+            deviceModel: "iPhone17,1",
+            systemVersion: "26.6",
+            appVersion: "1.0",
+            runtime: SessionRuntimeMetrics(
+                frameCount: 1,
+                cameraWidth: 1_920,
+                cameraHeight: 1_440,
+                effectiveFramesPerSecond: 0,
+                trackingSampleCounts: [.normal: 1]
+            ),
+            features: nil,
+            depth: nil,
+            map: MapBenchmarkMetrics(
+                mapID: UUID(),
+                mapName: "Wrong map",
+                landmarkCount: 0,
+                meshAnchorCount: 0,
+                meshVertexCount: 0,
+                meshTriangleCount: 0,
+                spatialMapByteCount: nil,
+                packageByteCount: nil,
+                ioDuration: nil
+            )
+        )
+
+        do {
+            try await library.saveBenchmark(report, for: package)
+            XCTFail("Expected another map's benchmark to be rejected")
+        } catch let error as MapLibraryError {
+            guard case .invalidBenchmark = error else {
+                return XCTFail("Unexpected map error: \(error)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: package.benchmarkURL.path))
+    }
+
     private func makeFixture() throws -> (root: URL, maps: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MapLifecycleTests-\(UUID().uuidString)", isDirectory: true)

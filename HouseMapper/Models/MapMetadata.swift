@@ -374,4 +374,5 @@ struct MapPackage: Identifiable, Hashable, Sendable {
     var worldMapURL: URL { directoryURL.appendingPathComponent("worldmap.arexperience") }
     var spatialMapURL: URL { directoryURL.appendingPathComponent("spatial-map.plist") }
     var previewURL: URL { directoryURL.appendingPathComponent("preview.jpg") }
+    var benchmarkURL: URL { directoryURL.appendingPathComponent("benchmark.json") }
 }
