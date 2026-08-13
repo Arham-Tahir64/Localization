@@ -1,4 +1,13 @@
-# HouseMapper
+# Localization: HouseMapper and car-camera SLAM
+
+The repository now contains two related systems:
+
+- `HouseMapper`: the original native iPhone indoor mapping/relocalization app.
+- `car_slam`: the current computer-side external-camera SLAM engineering comparison and road-test baseline.
+
+For the car-camera pivot, start with [the exact comparison and final engineering decision](docs/car-slam/04-comparison-and-final.md). The geometry-first implementation is currently recommended for real capture testing; the appearance hybrid remains experimental until metric PnP or another translation-scale source is integrated.
+
+## HouseMapper
 
 HouseMapper is a native, offline-first iOS proof of concept with an optional
 computer-assisted accuracy path for this pipeline:
